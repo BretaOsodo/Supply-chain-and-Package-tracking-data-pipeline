@@ -36,4 +36,8 @@ What I like about it: full control. I can dial the out-of-order rate up or down,
 What's problematic: it's synthetic. Real scanner data would have correlated failures (a whole depot losing connectivity at once, not independent random scanners), clock drift between devices and messier location data than a clean list of hub codes. The pipeline is designed to tolerate that kind of mess but the generator doesn't currently produce it.
 
 
+<<<<<<< HEAD
 # Constraints
+=======
+# Constraints
+>>>>>>> 7d48ca6ec25d9a852a14a143fc00cd6e984d309f
