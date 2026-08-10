@@ -1,0 +1,185 @@
+{
+    "title": "Spark - Package Tracking Pipeline",
+    "uid": "spark-package-tracking-pipeline",
+    "timezone": "browser",
+    "refresh": "10s",
+    "panels": [
+        {
+            "id": 1,
+            "title": "Spark Workers Alive",
+            "type": "stat",
+            "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+            "targets": [
+                {
+                    "expr": "sum(up{job=~\"spark-worker.*\"})",
+                    "legendFormat": "Workers",
+                    "datasource": { "type": "prometheus", "uid": "PB125CF2E8749F955" }
+                }
+            ],
+            "options": { "colorMode": "background" },
+            "fieldConfig": {
+                "defaults": {
+                    "thresholds": {
+                        "steps": [
+                            { "color": "red", "value": 0 },
+                            { "color": "green", "value": 1 }
+                        ]
+                    }
+                }
+            },
+            "datasource": { "type": "prometheus", "uid": "PB125CF2E8749F955" }
+        },
+        {
+            "id": 2,
+            "title": "Streaming Jobs Running",
+            "type": "stat",
+            "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+            "targets": [
+                {
+                    "expr": "count(up{job=~\"spark-job-.*\"} == 1)",
+                    "legendFormat": "Active jobs",
+                    "datasource": { "type": "prometheus", "uid": "PB125CF2E8749F955" }
+                }
+            ],
+            "options": { "colorMode": "background" },
+            "fieldConfig": {
+                "defaults": {
+                    "thresholds": {
+                        "steps": [
+                            { "color": "red", "value": 0 },
+                            { "color": "green", "value": 7 }
+                        ]
+                    }
+                }
+            },
+            "datasource": { "type": "prometheus", "uid": "PB125CF2E8749F955" }
+        },
+        {
+            "id": 3,
+            "title": "Worker Cores Used vs Total",
+            "type": "timeseries",
+            "gridPos": { "x": 8, "y": 0, "w": 16, "h": 8 },
+            "targets": [
+                {
+                    "expr": "metrics_worker_coresUsed_Value",
+                    "legendFormat": "Used - {{ instance }}",
+                    "datasource": { "type": "prometheus", "uid": "PB125CF2E8749F955" }
+                },
+                {
+                    "expr": "metrics_worker_coresFree_Value",
+                    "legendFormat": "Free - {{ instance }}",
+                    "datasource": { "type": "prometheus", "uid": "PB125CF2E8749F955" }
+                }
+            ],
+            "datasource": { "type": "prometheus", "uid": "PB125CF2E8749F955" }
+        },
+        {
+            "id": 4,
+            "title": "Batch Processing Duration by Job",
+            "type": "timeseries",
+            "gridPos": { "x": 0, "y": 8, "w": 24, "h": 8 },
+            "targets": [
+                {
+                    "expr": "spark_streaming_query_batchDurationMs",
+                    "legendFormat": "{{ job }} - {{ query_name }}",
+                    "datasource": { "type": "prometheus", "uid": "PB125CF2E8749F955" }
+                }
+            ],
+            "datasource": { "type": "prometheus", "uid": "PB125CF2E8749F955" }
+        },
+        {
+            "id": 5,
+            "title": "Input Rows per Second by Job",
+            "type": "timeseries",
+            "gridPos": { "x": 0, "y": 16, "w": 12, "h": 8 },
+            "targets": [
+                {
+                    "expr": "spark_streaming_query_inputRowsPerSecond",
+                    "legendFormat": "{{ job }} - {{ query_name }}",
+                    "datasource": { "type": "prometheus", "uid": "PB125CF2E8749F955" }
+                }
+            ],
+            "datasource": { "type": "prometheus", "uid": "PB125CF2E8749F955" }
+        },
+        {
+            "id": 6,
+            "title": "Processed Rows per Second by Job",
+            "type": "timeseries",
+            "gridPos": { "x": 12, "y": 16, "w": 12, "h": 8 },
+            "targets": [
+                {
+                    "expr": "spark_streaming_query_processedRowsPerSecond",
+                    "legendFormat": "{{ job }} - {{ query_name }}",
+                    "datasource": { "type": "prometheus", "uid": "PB125CF2E8749F955" }
+                }
+            ],
+            "datasource": { "type": "prometheus", "uid": "PB125CF2E8749F955" }
+        },
+        {
+            "id": 7,
+            "title": "Watermark Lag by Job (custom metric, see setup)",
+            "type": "timeseries",
+            "gridPos": { "x": 0, "y": 24, "w": 24, "h": 8 },
+            "targets": [
+                {
+                    "expr": "package_tracking_watermark_lag_seconds",
+                    "legendFormat": "{{ job }}",
+                    "datasource": { "type": "prometheus", "uid": "PB125CF2E8749F955" }
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "thresholds": {
+                        "steps": [
+                            { "color": "green", "value": 0 },
+                            { "color": "yellow", "value": 3600 },
+                            { "color": "red", "value": 7200 }
+                        ]
+                    }
+                }
+            },
+            "datasource": { "type": "prometheus", "uid": "PB125CF2E8749F955" }
+        },
+        {
+            "id": 8,
+            "title": "Failed Tasks",
+            "type": "bargauge",
+            "gridPos": { "x": 0, "y": 32, "w": 12, "h": 8 },
+            "targets": [
+                {
+                    "expr": "sum by (instance) (metrics_executor_failedTasks_Value)",
+                    "legendFormat": "{{ instance }}",
+                    "instant": true,
+                    "datasource": { "type": "prometheus", "uid": "PB125CF2E8749F955" }
+                }
+            ],
+            "fieldConfig": {
+                "defaults": {
+                    "thresholds": {
+                        "steps": [
+                            { "color": "green", "value": 0 },
+                            { "color": "yellow", "value": 1 },
+                            { "color": "red", "value": 5 }
+                        ]
+                    }
+                }
+            },
+            "datasource": { "type": "prometheus", "uid": "PB125CF2E8749F955" }
+        },
+        {
+            "id": 9,
+            "title": "JVM Heap Memory Used",
+            "type": "timeseries",
+            "gridPos": { "x": 12, "y": 32, "w": 12, "h": 8 },
+            "targets": [
+                {
+                    "expr": "jvm_heap_used",
+                    "legendFormat": "{{ instance }}",
+                    "datasource": { "type": "prometheus", "uid": "PB125CF2E8749F955" }
+                }
+            ],
+            "datasource": { "type": "prometheus", "uid": "PB125CF2E8749F955" }
+        }
+    ],
+    "schemaVersion": 38
+}
