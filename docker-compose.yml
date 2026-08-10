@@ -89,3 +89,165 @@ services:
             SCHEMA_REGISTRY_LISTENERS: 'http://0.0.0.0:8082'
         networks:
         - supply_chain
+
+    #kafdrop for UI 
+    kafdrop:
+        image: obsidiandynamics/kafdrop:latest
+        container_name: kafdrop
+        ports:
+            - "127.0.0.1:9000:9000"
+
+        environment:
+            KAFKA_BROKERCONNECT: "kafka1:29092,kafka2:29092"
+            JVM_OPTS: "-Xms32M -Xmx128M"
+
+        depends_on:
+            - kafka1
+            - kafka2
+
+        networks:
+            - supply_chain
+
+    #Spark master services 
+    spark-master:
+        build:
+            context: ./spark
+            dockerfile: Dockerfile
+
+        container_name: spark-master
+        hostname: spark-master
+        command:
+            - /opt/spark/bin/spark-class
+            - org.apache.spark.deploy.master.Master
+
+        ports:
+            - "127.0.0.1:9090:8080"
+            - "127.0.0.1:7077:7077"
+
+        volumes:
+            - ./spark:/spark
+        networks:
+            - supply_chain
+
+        restart: unless-stopped
+
+    spark-worker1:
+        build:
+            context: ./spark
+            dockerfile: Dockerfile
+
+        container_name: spark-worker1
+        hostname: spark-worker1
+        command:
+            - /opt/spark/bin/spark-class
+            - org.apache.spark.deploy.worker.Worker
+            - spark://spark-master:7077
+
+        ports:
+            - "127.0.0.1:9090:8080"
+        volumes:
+            - ./spark:/spark
+
+        depends_on:
+            - spark-master
+
+        environment:
+            - SPARK_WORKER_MEMORY: 1g
+            - SPARK_WORKER_CORES: 2
+            - SPARK_MODE: worker
+            - SPARK_MASTER: spark://spark-master:7077
+        networks:
+            - supply_chain      
+
+        restart: unless-stopped
+
+
+    spark-worker2:
+        build:
+            context: ./spark
+            dockerfile: Dockerfile
+
+        container_name: spark-worker2
+        hostname: spark-worker2
+        command:
+            - /opt/spark/bin/spark-class
+            - org.apache.spark.deploy.worker.Worker
+            - spark://spark-master:7077
+
+        ports:
+            - "127.0.0.1:9091:8080"
+
+        depends_on:
+            - spark-master
+
+        environment:
+            - SPARK_WORKER_MEMORY: 1g
+            - SPARK_WORKER_CORES: 2
+            - SPARK_MODE: worker
+            - SPARK_MASTER: spark://spark-master:7077
+
+        volumes:
+            - ./spark:/spark    
+        networks:
+            - supply_chain
+        restart: unless-stopped
+
+    #prometheus service for monitoring
+    prometheus:
+        image: prom/prometheus:latest
+        container_name: prometheus
+        ports:
+            - "127.0.0.1:9096:9090"
+
+        volumes:
+            - ./monitoring/prometheus:/etc/prometheus
+
+        depends_on:
+            - spark-master
+            - spark-worker1
+            - spark-worker2
+        networks:
+            - supply_chain
+
+    #grafana service for monitoring
+    grafana:
+        image: grafana/grafana:latest
+        container_name: grafana
+        ports:
+            - "127.0.0.1:3000:3000"
+
+        volumes:
+            - grafana-data:/var/lib/grafana
+            - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+            - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+
+        networks:
+            - supply_chain
+
+    #alertmanager service for monitoring
+    alertmanager:
+        image: prom/alertmanager:latest
+        container_name: alertmanager
+        ports:
+            - "127.0.0.1:9093:9093"
+        networks:
+            - supply_chain
+
+    kafka-exporters:
+        image: danielqsj/kafka-exporter:latest
+        container_name: kafka-exporters
+        ports:
+            - "127.0.0.1:9308:9308"
+        
+        command:
+            - '--kafka.server=kafka1:29092,kafka2:29092'
+            - '--web.listen-address=:9308'
+            - '--log.level=info'
+        
+        depends_on:
+            - kafka1
+            - kafka2
+        networks:
+            - supply_chain
+
+            
