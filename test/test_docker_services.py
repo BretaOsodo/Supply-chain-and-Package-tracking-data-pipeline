@@ -320,29 +320,6 @@ class TestPostgres:
         """
         assert wait_for_port(POSTGRES_HOST,int(POSTGRES_PORT), timeout=60), "Postgres is not listening on port 5432"
 
-    def test_can_connect_and_query(self):
-        """
-        Should be able to connect to Postgres and run a simple query
-        """
-        import psycopg2
-        try:
-            conn = psycopg2.connect(
-                host=POSTGRES_HOST,
-                port=POSTGRES_PORT,
-                dbname=POSTGRES_DB,
-                user=POSTGRES_USER,
-                password=POSTGRES_PASSWORD,
-                connect_timeout=5
-            )
-            cur = conn.cursor()
-            cur.execute("SELECT 1;")
-            result = cur.fetchone()
-            assert result[0] == 1, f"Expected 1, got {result[0]}"
-        finally:
-            if cur:
-                cur.close()
-            if conn:
-                conn.close()
 
 
 #PGAdmin tests

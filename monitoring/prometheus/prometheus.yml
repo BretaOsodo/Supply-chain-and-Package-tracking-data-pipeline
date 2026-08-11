@@ -24,12 +24,12 @@ scrape_configs:
       metrics_path: '/metrics/worker/prometheus'
       static_configs:
         - targets: 
-            - 'spark-worker1:8080'
+            - 'spark-worker1:8081'
     - job_name: 'spark-worker2'
       metrics_path: '/metrics/worker/prometheus'
       static_configs:
         - targets: 
-            - 'spark-worker2:8080'
+            - 'spark-worker2:8081'
 
     - job_name: 'alertmanager'
       static_configs:
