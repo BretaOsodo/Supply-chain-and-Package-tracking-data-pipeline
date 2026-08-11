@@ -25,8 +25,14 @@ RUN curl -L https://repo1.maven.org/maven2/org/apache/hadoop/hadoop-aws/3.4.1/ha
 RUN curl -L https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar \
     -o ${SPARK_JARS_DIR}/aws-java-sdk.jar
 
+# Copy Spark metrics configuration into Spark's config directory
+COPY metrics.properties /opt/spark/conf/metrics.properties
+
+# Copy project files
+COPY . /spark
+
+RUN chown spark:spark /opt/spark/conf/metrics.properties
+
 USER spark
 
 WORKDIR /spark
-
-COPY . .
