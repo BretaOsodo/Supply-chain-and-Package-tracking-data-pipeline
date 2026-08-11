@@ -1,5 +1,5 @@
 volumes:
-    postgres-db-volume:
+    postgres-data:
     pgadmin-data:
     kafka-data:
     grafana-data:
@@ -264,3 +264,39 @@ services:
         privileged: true
         devices:
             - /dev/kmsg
+
+    postgres:
+        image: postgres:latest
+        restart: on-failure
+        container_name: postgres
+        env_file:
+            - .env
+        environment:
+        - POSTGRES_DB=${POSTGRES_SCHEMA}
+        - POSTGRES_USER=${POSTGRES_USER}
+        - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+        ports:
+            - "${HOST_PORT}:5432"
+
+        volumes:
+            - ./:/bootcamp/
+            - ./data.dump:/docker-entrypoint-initdb.d/data.dump
+            - ./scripts/init-db.sh:/docker-entrypoint-initdb.d/init-db.sh
+            - postgres-data:/var/lib/postgresql/data
+
+        networks:
+            - supply_chain
+
+    pgadmin:
+        image: dpage/pgadmin4:latest
+        restart: on-failure
+        container_name: pgadmin
+        environment:
+            - PDADMIN_DEFAULT_EMAIL=${PGADMIN_EMAIL}
+            - PGADMIN_DEFAULT_PASSWORD=${PGADMIN_PASSWORD}
+        ports:
+            - "${PGADMIN_PORT}:80"
+        volumes:
+            - pgadmin-data:/var/lib/pgadmin
+        networks:
+            - supply_chain
