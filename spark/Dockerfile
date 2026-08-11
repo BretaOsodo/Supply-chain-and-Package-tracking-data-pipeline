@@ -6,12 +6,12 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir pyspark==3.4.1\
+RUN pip3 install --no-cache-dir pyspark==3.4.1 \
     && pip3 install --no-cache-dir boto3==1.26.13 \
     && pip3 install --no-cache-dir psycopg2-binary==2.9.7 \
     && pip3 install --no-cache-dir pyarrow==12.0.1 \
-    && pip3 install --no-cache-dir fastparquet==2024.6.14 \
-    && pip3 install --no-cache-dir confluent-kafka==2.2.0 
+    && pip3 install --no-cache-dir fastparquet==2024.2.0 \
+    && pip3 install --no-cache-dir confluent-kafka==2.2.0
 
 ENV SPARK_HOME=/opt/spark
 ENV PATH=$SPARK_HOME/bin:$PATH
