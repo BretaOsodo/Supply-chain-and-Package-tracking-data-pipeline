@@ -45,6 +45,27 @@ def wait_for_port(host:str , port:int, timeout:float=60) -> bool:
             time.sleep(2)
     return False
 
+def wait_for_kafka_topic(admin_client, topic_name, timeout=30):
+    deadline = time.time() + timeout
+
+    while time.time() < deadline:
+        try:
+            metadata = admin_client.list_topics(
+                topic=topic_name,
+                timeout=5
+            )
+
+            if topic_name in metadata.topics:
+                return True
+
+        except Exception:
+            pass
+
+        time.sleep(1)
+
+    return False
+
+
 def wait_for_http(url:str, timeout:float=60, expected_status:int=200) -> bool:
 
     dealine = time.time() + timeout
@@ -100,9 +121,12 @@ class Testkafka:
             f"Expected 2 brokers, found {len(metadata.brokers)}. Brokers: {metadata.brokers}"
         )
 
-    def test_can_create_topic(self,admin_client,test_topic):
-        metadata = admin_client.list_topics(timeout=10)
-        assert test_topic in metadata.topics, (f"Topic {test_topic} was not created successfully")
+    def test_can_create_topic(self, admin_client, test_topic):
+        assert wait_for_kafka_topic(
+            admin_client,
+            test_topic,
+            timeout=30
+        ), f"Topic {test_topic} was not created successfully"
 
     def test_produce_and_consume_roundtrip(self,test_topic):
         producer = Producer({"bootstrap.servers": KAFKA_BOOTSTRAP})
