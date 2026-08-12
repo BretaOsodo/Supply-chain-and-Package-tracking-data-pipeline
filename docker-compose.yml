@@ -95,7 +95,7 @@ services:
         image: obsidiandynamics/kafdrop:latest
         container_name: kafdrop
         ports:
-            - "127.0.0.1:9000:9000"
+            - "127.0.0.1:9020:9000"
 
         environment:
             KAFKA_BROKERCONNECT: "kafka1:29092,kafka2:29092"
