@@ -5,6 +5,9 @@ from typing import Dict
 import time 
 import logging 
 import os 
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 logging.basicConfig(level=logging.INFO)
@@ -63,7 +66,11 @@ class ValidationPipeline:
         self.input_topic=input_topic
         self.validated_topic = validated_topic
         self.invalidated_topic=invalidated_topic
-        self.s3_bucket=s3_bucket
+        self.s3_bucket= (
+            s3_bucket
+            if s3_bucket.startswith("s3a://")
+            else f"s3a://{s3_bucket}"
+        )
         self.checkpoint_location=checkpoint_location
 
 
@@ -96,8 +103,12 @@ class ValidationPipeline:
             .config("spark.sql.streaming.backpressure.initialRate", "100")\
             .config(
                     "spark.jars.packages",
-                    "org.apache.spark:spark-sql-kafka-0-10_2.13:4.2.0"
-                )
+                    "org.apache.spark:spark-sql-kafka-0-10_2.13:4.2.0",
+                    "org.apache.hadoop:hadoop-aws:3.5.0",
+                    "com.amazonaws:aws-java-sdk-bundle:1.12.797"
+                )\
+            .config("spark.hadoop.fs.s3a.access.key",os.getenv("AWS_ACCESS_KEY"))\
+            .config("spark.hadoop.fs.s3a.secret.key",os.getenv("AWS_SECRET_KEY"))
 
         #add s3/Hadoop configurations
         builder= builder\
@@ -105,9 +116,20 @@ class ValidationPipeline:
             .config("spark.hadoop.fs.s3a.aws.credentials.provider", 
                    "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider") \
             .config("spark.hadoop.fs.s3a.multipart.size", "104857600") \
-            .config("spark.hadoop.fs.s3a.max.total.tasks", "5")
+            .config("spark.hadoop.fs.s3a.max.total.tasks", 
+                "5")
 
-    def _creat_input_schema(self)->StructType:
+        #add custom configuration
+        if spark_config:
+            for key, value in spark_config.items():
+                builder=builder.config(key,value)
+
+        spark=builder.getOrCreate()
+        spark.sparkContext.setLogLevel("WARN")
+
+        return spark
+
+    def _create_input_schema(self)->StructType:
 
         return EVENT_SCHEMA
 
@@ -216,7 +238,7 @@ class ValidationPipeline:
         ).withColumn(
             "is_scan_type_valid",
             when(
-                col("scant_type").isNotNull &
+                col("scan_type").isNotNull() &
                 col("scan_type").isin([
                     "picked", "shipped", "in_transit", "out_for_delivery", "delivered"
                 ]),
@@ -225,7 +247,7 @@ class ValidationPipeline:
         ).withColumn(
             "is_location_id_valid",
             when(
-                col("location_id").isNotNull & (length(col("location_id")) > 0),
+                col("location_id").isNotNull() & (length(col("location_id")) > 0),
                 lit(True)
             ).otherwise(lit(False))
         ).withColumn(
@@ -237,7 +259,7 @@ class ValidationPipeline:
         ).withColumn(
             "is_device_id_valid",
             when(
-                col("device_id").isNotNull() & (length(col("devive_id")) > 0),
+                col("device_id").isNotNull() & (length(col("device_id")) > 0),
                 lit(True)
             ).otherwise(lit(False))
         ).withColumn(
@@ -246,26 +268,44 @@ class ValidationPipeline:
             col("is_scan_type_valid") & 
             col("is_location_id_valid") & 
             col("is_timestamp_valid") & 
-            col("is_device_id_valid")
+            col("is_device_id_valid") &
+            (~coalesce(col("is_malformed"), lit(False)))
         ).withColumn(
-            "validation_errors",
-            when(
-                ~col("is_package_id_valid"), 
-                concat(lit("package_id invalid; "), when(~col("is_scan_type_valid"), lit("scan_type invalid; ")).otherwise(lit("")))
-            ).when(
-                ~col("is_scan_type_valid"),
-                concat(lit("scan_type invalid; "), when(~col("is_location_id_valid"), lit("location_id invalid; ")).otherwise(lit("")))
-            ).when(
-                ~col("is_location_id_valid"),
-                concat(lit("location_id invalid; "), when(~col("is_timestamp_valid"), lit("timestamp invalid; ")).otherwise(lit("")))
-            ).when(
-                ~col("is_timestamp_valid"),
-                concat(lit("timestamp invalid; "), when(~col("is_device_id_valid"), lit("device_id invalid; ")).otherwise(lit("")))
-            ).when(
-                ~col("is_device_id_valid"),
-                lit("device_id invalid")
-            ).otherwise(lit(None))
+    "validation_errors",
+    concat_ws(
+        "; ",
+        when(
+            ~col("is_package_id_valid"),
+            lit("package_id invalid")
+        ),
+        when(
+            ~col("is_scan_type_valid"),
+            lit("scan_type invalid")
+        ),
+        when(
+            ~col("is_location_id_valid"),
+            lit("location_id invalid")
+        ),
+        when(
+            ~col("is_timestamp_valid"),
+            lit("event_time invalid")
+        ),
+        when(
+            ~col("is_device_id_valid"),
+            lit("device_id invalid")
+        ),
+        when(
+            coalesce(col("is_malformed"), lit(False)),
+            concat(
+                lit("malformed event: "),
+                coalesce(
+                    col("malformed_type"),
+                    lit("unknown")
+                )
+            )
         )
+    )
+)
 
         return validated_df
 
@@ -302,8 +342,14 @@ class ValidationPipeline:
             )
         #convert timestamp string to timestamp type
         parsed_df=parsed_df\
-            .withColumn("event_timestamp",to_timestamp(col("event_timestamp")))\
-            .withColumn("processing_timesstamp",current_timestamp())
+            .withColumn(
+                "event_time",
+                to_timestamp(
+                    col("event_time"),
+                    "yyyy-MM-dd'T'HH:mm:ss"
+                )
+            )\
+            .withColumn("processing_timestamp",current_timestamp())
 
         return parsed_df
 
@@ -320,12 +366,16 @@ class ValidationPipeline:
                     col("package_id"),
                     col("scan_type"),
                     col("location_id"),
-                    col("timestamp"),
-                    col("device_id"),
+                    col("event_time"),
                     col("available_time"),
+                    col("device_id"),
                     col("is_malformed"),
-                    col("malformed_type")
-                )
+                    col("malformed_type"),
+                    col("is_valid"),
+                    col("validation_errors"),
+                    col("kafka_timestamp"),
+                    col("processing_timestamp")
+)
             ).alias("value"),
             col("package_id").alias("key")
         ).writeStream \
@@ -341,11 +391,11 @@ class ValidationPipeline:
 
     def write_to_s3_partitioned(self,df):
         partitioned_df = df \
-            .withColumn("year", year(col("event_timestamp"))) \
-            .withColumn("month", month(col("event_timestamp"))) \
-            .withColumn("day", dayofmonth(col("event_timestamp"))) \
-            .withColumn("hour", hour(col("event_timestamp"))) \
-            .withColumn("scan_date", date_format(col("event_timestamp"), "yyyy-MM-dd"))
+            .withColumn("year", year(col("event_time"))) \
+            .withColumn("month", month(col("event_time"))) \
+            .withColumn("day", dayofmonth(col("event_time"))) \
+            .withColumn("hour", hour(col("event_time"))) \
+            .withColumn("scan_date", date_format(col("event_time"), "yyyy-MM-dd"))
         
         # Write to S3 with partitioning
         s3_path = f"{self.s3_bucket}/valid_scans"
@@ -363,3 +413,90 @@ class ValidationPipeline:
         
         return query
 
+    def run_pipeline(self):
+        """
+        Run the complete streaming pipeline.
+        """
+
+        logger.info("Starting Package Tracking Validation Pipeline...")
+        logger.info(f"Input topic: {self.input_topic}")
+        logger.info(f"Validated topic: {self.validated_topic}")
+        logger.info(f"Invalidated topic: {self.invalidated_topic}")
+        logger.info(f"S3 bucket: {self.s3_bucket}")
+        logger.info(f"Checkpoint location: {self.checkpoint_location}")
+
+        #read from kafka
+        raw_stream = self.read_from_kafka()
+
+        #parse events 
+        parsed_stream=self.parse_events(raw_stream)
+
+        #validated events 
+        validated_stream = self.validate_event(parsed_stream)
+
+        #split streams 
+        valid_stream, invalid_stream=self.split_valid_invalid(validated_stream)
+
+        #define output query
+
+        queries=[]
+
+        #1. Write valid data to kafka validated topic
+        if self.validated_topic:
+            logger.info(
+                f"Writing data to kafka topic: {self.validated_topic}"
+            )
+
+            valid_kafka_query=self.write_to_kafka(
+                valid_stream,
+                self.validated_topic
+            ).start()
+
+            queries.append(valid_kafka_query)
+
+        #2. write invalid data to kafka invalidated topic
+        if self.invalidated_topic:
+            logger.info(f"Writing invalid data to kafka topic:{self.invalidated_topic}")
+
+            invalid_kafka_query= self.write_to_kafka(
+                invalid_stream,
+                self.invalidated_topic
+            ).start()
+            queries.append(invalid_kafka_query)
+
+        #. write valid data to s3 with partitioning
+        if self.s3_bucket:
+            logger.info(f"Writing valid data to s3: {self.s3_bucket}")
+            s3_query=self.write_to_s3_partitioned(valid_stream).start()
+            queries.append(s3_query)
+
+        #wait for all queries to finish 
+        for query in queries:
+            query.awaitTermination()
+
+def main():
+    #initialize pipeline
+    pipeline=ValidationPipeline(
+        bootstrap_servers=KAFKA_BOOTSTRAP_SERVERS,
+        input_topic=KAFKA_INPUT_TOPIC,
+        validated_topic=KAFKA_VALIDATED_TOPIC,
+        invalidated_topic=KAFKA_INVALIDATED_TOPIC,
+        s3_bucket=S3_BUCKET_VALIDATED,
+        checkpoint_location=CHECKPOINT_LOCATION,
+
+    )
+
+    try:
+        #run pipeline
+        pipeline.run_pipeline()
+
+    except KeyboardInterrupt:
+        logger.info("pipeline stopped by user")
+
+    except Exception as e:
+        logger.error(f"Pipeline error: {e}")
+
+        raise 
+
+if __name__=="__main__":
+    main()
