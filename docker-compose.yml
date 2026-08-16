@@ -308,3 +308,20 @@ services:
             - pgadmin-data:/var/lib/pgadmin
         networks:
             - supply_chain
+
+    redis:
+        image: redis:7-alpine
+        container_name: redis
+        ports:
+            - "127.0.0.1:6379:6379"
+        networks:
+            - supply_chain
+
+    dynamodb-local:
+        image: amazon/dynamodb-local:latest
+        container_name: dynamodb-local
+        ports:
+            - "127.0.0.1:8000:8000"
+        command: ["-jar", "DynamoDBLocal.jar", "-inMemory"]
+        networks:
+            - supply_chain
