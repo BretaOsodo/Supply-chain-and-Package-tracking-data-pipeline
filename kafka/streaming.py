@@ -31,7 +31,7 @@ def delivery_report(err,msg):
         )
 
 for event in stream_package_events(
-    num_packages=10,
+    num_packages=10000,
     events_per_batch=1,
     delay_seconds=1.0
 ):
