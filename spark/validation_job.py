@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-KAFKA_BOOTSTRAP_SERVERS= "127.0.0.1:9092,127.0.0.1:9093"
+KAFKA_BOOTSTRAP_SERVERS= "kafka1:29092,kafka2:29092"
 KAFKA_INPUT_TOPIC = "package_events"
 KAFKA_VALIDATED_TOPIC="scan_events_validated"
 KAFKA_INVALIDATED_TOPIC="scan_events_dlq"
@@ -102,13 +102,14 @@ class ValidationPipeline:
             .config("spark.sql.streaming.backpressure.enabled", "true") \
             .config("spark.sql.streaming.backpressure.initialRate", "100")\
             .config(
-                    "spark.jars.packages",
-                    "org.apache.spark:spark-sql-kafka-0-10_2.13:4.2.0",
-                    "org.apache.hadoop:hadoop-aws:3.5.0",
-                    "com.amazonaws:aws-java-sdk-bundle:1.12.797"
-                )\
+                "spark.jars.packages",
+                "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.1,"
+                "org.apache.hadoop:hadoop-aws:3.3.4,"
+                "com.amazonaws:aws-java-sdk-bundle:1.11.1026"
+            )\
             .config("spark.hadoop.fs.s3a.access.key",os.getenv("AWS_ACCESS_KEY"))\
-            .config("spark.hadoop.fs.s3a.secret.key",os.getenv("AWS_SECRET_KEY"))
+            .config("spark.hadoop.fs.s3a.secret.key",os.getenv("AWS_SECRET_KEY"))\
+            .config("spark.sql.legacy.timeParserPolicy", "CORRECTED")
 
         #add s3/Hadoop configurations
         builder= builder\
@@ -346,7 +347,7 @@ class ValidationPipeline:
                 "event_time",
                 to_timestamp(
                     col("event_time"),
-                    "yyyy-MM-dd'T'HH:mm:ss"
+                    "yyyy-MM-dd'T'HH:mm:ss'Z'"
                 )
             )\
             .withColumn("processing_timestamp",current_timestamp())
@@ -494,7 +495,7 @@ def main():
         logger.info("pipeline stopped by user")
 
     except Exception as e:
-        logger.error(f"Pipeline error: {e}")
+        logger.error(f"Pipeline error")
 
         raise 
 
