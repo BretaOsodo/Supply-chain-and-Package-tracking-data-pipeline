@@ -123,7 +123,10 @@ services:
         ports:
             - "127.0.0.1:9090:8080"
             - "127.0.0.1:7077:7077"
-
+        
+        environment:
+            AWS_ACCESS_KEY: ${AWS_ACCESS_KEY}
+            AWS_SECRET_KEY: ${AWS_SECRET_KEY}
         volumes:
             - ./spark:/spark
         networks:
