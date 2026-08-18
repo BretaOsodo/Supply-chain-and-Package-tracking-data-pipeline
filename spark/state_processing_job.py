@@ -1,17 +1,15 @@
 import json 
 import logging 
-import os 
 from datetime import datetime, timezone
+import os
 
 import redis 
-import boto3
 from pyspark.sql import SparkSession, Row
 from pyspark.sql.types import *
 from pyspark.sql.functions import *
 
 from pyspark.sql.streaming import StreamingQueryListener
-from pyspark.sql.streaming.state import GroupStateTimeout,GroupState
-from typing import Dict, Optional, Tuple, Iterator
+from typing import Dict, Optional, Iterator
 
 logging.basicConfig(level=logging.INFO)
 logger= logging.getLogger(__name__)
@@ -31,7 +29,7 @@ class PackageStateProcessor:
             redis_db:int=0,
             redis_password: Optional[str] = None,
             dynamodb_table: str = "package-tracking",
-            dynamodb_region: str = "",
+            dynamodb_region: str = "eu-north-1",
             dynamodb_endpoint: Optional[str] = None,
             checkpoint_location: str = "./checkpoints/state_processor",
             watermark_delay: str = "2 hours",
@@ -115,12 +113,16 @@ class PackageStateProcessor:
         """Get or create Redis client"""
         if self._redis_client is None:
             try:
-                import redis 
-                self.redis_client=redis.Redis(
+    
+                self._redis_client=redis.Redis(
                     host=self.redis_host,
                     port=self.redis_port,
                     db=self.redis_db,
-                    decode_response=True
+                    password=self.redis_password,
+                    decode_response=True,
+                    socket_connect_timeout=5,
+                    socket_timeout=5,
+                    retry_on_timeout=True
                 )
 
                 #test connection 
@@ -176,7 +178,7 @@ class PackageStateProcessor:
             col("kafka_receive_time")
         )
 
-    def _updated_package_state(self,events_df):
+    def _update_package_state(self,events_df):
         """
         Update package state using groupBy and aggregate functions.
         This maintains state across streaming batches.
@@ -197,7 +199,7 @@ class PackageStateProcessor:
         #group by package_id and update state
 
         #create a struct with all event details 
-        state_udf=udf(self._updated_state_udf,self.state_schema)
+        state_udf=udf(self._update_state_udf,self.state_schema)
 
         #aggregate by package_id
         state_df=events_with_time.groupBy("package_id").agg(
@@ -230,8 +232,6 @@ class PackageStateProcessor:
     def _update_state_udf(
         package_id,
         event_history,
-        last_event_time,
-        first_event_time,
         scan_count
     ):
 
@@ -270,5 +270,637 @@ class PackageStateProcessor:
             "total_scans": scan_count,
             "completed": is_completed,
             "completion_time": completion_time,
-            "processing_timestamp": current_timestamp().cast("string")
+            "processing_timestamp": datetime.now(timezone.utc).isoformat()
         }
+
+    def _write_to_redis_partition(
+    self,
+    iterator,
+    redis_host: str,
+    redis_port: int,
+    redis_db: int,
+    redis_password: Optional[str]
+) -> None:
+
+        try:
+            import redis
+
+            redis_client = redis.Redis(
+                host=redis_host,
+                port=redis_port,
+                db=redis_db,
+                password=redis_password,
+                decode_responses=True,
+                socket_connect_timeout=5,
+                socket_timeout=5,
+                retry_on_timeout=True
+            )
+
+            redis_client.ping()
+
+            logger.info(
+                f"Redis connection established: "
+                f"{redis_host}:{redis_port}"
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to connect to Redis: {e}")
+            return
+
+        pipeline = redis_client.pipeline()
+        batch_count = 0
+
+        try:
+            for row in iterator:
+
+                state = row.asDict(recursive=True)
+
+                package_id = state.get("package_id")
+
+                if not package_id:
+                    continue
+
+                state_json = json.dumps(state, default=str)
+
+                # Full state
+                pipeline.setex(
+                    f"package:{package_id}:state",
+                    30 * 24 * 60 * 60,
+                    state_json
+                )
+
+                # Queryable fields
+                pipeline.hset(
+                    f"package:{package_id}",
+                    mapping={
+                        "current_state": state.get("current_state") or "",
+                        "current_location": state.get("current_location") or "",
+                        "last_scan_time": state.get("last_scan_time") or "",
+                        "total_scans": str(state.get("total_scans", 0)),
+                        "completed": str(
+                            state.get("completed", False)
+                        ).lower()
+                    }
+                )
+
+                pipeline.sadd(
+                    "packages:active",
+                    package_id
+                )
+
+                if state.get("completed", False):
+                    pipeline.sadd(
+                        "packages:completed",
+                        package_id
+                    )
+
+                batch_count += 1
+
+                if batch_count >= 100:
+                    pipeline.execute()
+                    pipeline = redis_client.pipeline()
+                    batch_count = 0
+
+            if batch_count > 0:
+                pipeline.execute()
+
+        except Exception as e:
+            logger.error(
+                f"Redis partition write failed: {e}"
+            )
+
+        finally:
+            try:
+                redis_client.close()
+            except Exception:
+                pass
+
+    def _write_to_dynamodb_partition(self, iterator: Iterator[Dict],
+                                      table_name: str,
+                                      region_name: str) -> None:
+        """
+        Write a partition of state data to DynamoDB using batch writes.
+        This runs on executors - no collect() needed.
+        
+        Args:
+            iterator: Iterator of state dictionaries
+            table_name: DynamoDB table name
+            region_name: AWS region
+        """
+        # Initialize DynamoDB client per partition
+        try:
+            #import boto3 
+            import boto3
+
+            dynamodb = boto3.resource(
+                'dynamodb', 
+                region_name=region_name,
+                endpoint_url=self.dynamodb_endpoint,
+                aws_access_key = os.getenv("AWS_ACCESS_KEY"),
+                aws_secret_access_key=os.getenv("AWS_SECRET_KEY")                
+
+                                      )
+            table = dynamodb.Table(table_name)
+        except Exception as e:
+            logger.error(f"Failed to connect to DynamoDB: {e}")
+            return
+        
+        batch_items = []
+        batch_size = 25  # DynamoDB batch write limit
+        
+        for row in iterator:
+            try:
+                state=row.asDict(recursive=True)
+
+                package_id = state.get("package_id")
+                if not package_id:
+                    continue
+                
+                # Prepare item
+                item = {
+                    'package_id': package_id,
+                    'current_state': state.get("current_state", ""),
+                    'current_location': state.get("current_location", ""),
+                    'last_scan_time': state.get("last_scan_time", ""),
+                    'first_scan_time': state.get("first_scan_time", ""),
+                    'total_scans': state.get("total_scans", 0),
+                    'completed': bool(state.get("completed", False)),
+                    'state_history': state.get("state_history", []),
+                    'last_device_id': state.get("last_device_id", ""),
+                    'processing_timestamp': state.get("processing_timestamp", "")
+                }
+                
+                completion_time = state.get("completion_time")
+                if completion_time:
+                    item['completion_time'] = completion_time
+                
+                batch_items.append(item)
+                
+                # Write in batches
+                if len(batch_items) >= batch_size:
+                    self._batch_write_dynamodb(table, batch_items)
+                    batch_items = []
+                    
+            except Exception as e:
+                logger.error(f"Failed to prepare DynamoDB write for {package_id}: {e}")
+        
+        # Write remaining items
+        if batch_items:
+            self._batch_write_dynamodb(table, batch_items)
+
+    def _batch_write_dynamodb(self, table, items):
+        """Batch write items to DynamoDB with retry logic."""
+        try:
+            with table.batch_writer() as batch:
+                for item in items:
+                    batch.put_item(Item=item)
+            logger.debug(f"Wrote {len(items)} items to DynamoDB")
+        except Exception as e:
+            logger.error(f"Failed to batch write to DynamoDB: {e}")
+            # Fallback to individual writes
+            for item in items:
+                try:
+                    table.put_item(Item=item)
+                except Exception as e2:
+                    logger.error(f"Failed to write item {item.get('package_id')}: {e2}")
+
+    def _write_to_kafka_batch(self,state_df,batch_id):
+        if state_df.count() == 0:
+            return
+        
+        # Convert state to JSON and write to Kafka
+        kafka_df = state_df.select(
+            to_json(
+                struct(
+                    col("package_id"),
+                    col("current_state"),
+                    col("state_history"),
+                    col("first_scan_time"),
+                    col("last_scan_time"),
+                    col("current_location"),
+                    col("last_device_id"),
+                    col("total_scans"),
+                    col("completed"),
+                    col("completion_time"),
+                    col("processing_timestamp")
+                )
+            ).alias("value"),
+            col("package_id").alias("key")
+        )
+        # Write to Kafka
+        kafka_df.write \
+            .format("kafka") \
+            .option("kafka.bootstrap.servers", self.bootstrap_servers) \
+            .option("topic", self.output_topic) \
+            .option("kafka.acks", "all") \
+            .option("kafka.compression.type", "snappy") \
+            .mode("append") \
+            .save()
+        
+        logger.info(f"Batch {batch_id}: Wrote {state_df.count()} states to Kafka")
+
+    def process_state_with_foreach_batch(self):
+        """
+        Process state using foreachBatch for better control and external system writes.
+        """
+        logger.info("Starting State Processing Pipeline with foreachBatch...")
+        
+        # Read from Kafka
+        raw_stream = self.spark.readStream \
+            .format("kafka") \
+            .option("kafka.bootstrap.servers", self.bootstrap_servers) \
+            .option("subscribe", self.input_topic) \
+            .option("startingOffsets", "latest") \
+            .option("failOnDataLoss", "false") \
+            .option("maxOffsetsPerTrigger", "1000") \
+            .load()
+        
+        # Parse events
+        parsed_stream = self._parse_events(raw_stream)
+        
+        # Process state
+        def process_batch(df, batch_id):
+            if df.count() == 0:
+                return
+            
+            logger.info(f"Processing batch {batch_id} with {df.count()} events")
+            
+            # Update state
+            state_df = self._update_package_state(df)
+
+            if state_df.count() > 0:
+
+                state_rdd=state_df.rdd
+
+                # Write to Redis using foreachPartition
+                state_rdd.foreachPartition(
+                    lambda partition: self._write_to_redis_partition(
+                        partition,
+                        self.redis_host,
+                        self.redis_port,
+                        self.redis_db,
+                        self.redis_password
+                    )
+                )
+
+                # Write to DynamoDB using foreachPartition
+                state_rdd.foreachPartition(
+                    lambda partition: self._write_to_dynamodb_partition(
+                        partition,
+                        self.dynamodb_table_name,  
+                        self.dynamodb_region,
+                        self.dynamodb_endpoint
+                    )
+                )
+
+                # Write to Kafka
+                self._write_to_kafka_batch(state_df, batch_id)
+
+                completed = state_df.filter(col("completed") == True).count()
+                in_progress = state_df.count() - completed
+                logger.info(f"Batch {batch_id}: {completed} completed, {in_progress} in-progress packages")
+
+        query = parsed_stream.writeStream \
+            .foreachBatch(process_batch) \
+            .option("checkpointLocation", f"{self.checkpoint_location}/foreach_batch") \
+            .trigger(processingTime="10 seconds") \
+            .start()
+
+        return query
+    
+    def process_state_with_map_groups(self):
+        """
+        Process state using mapGroupsWithState for more efficient state management.
+        This is a more advanced approach with better state handling.
+        """
+        from pyspark.sql.streaming import GroupState, GroupStateTimeout
+        
+        logger.info("Starting State Processing Pipeline with mapGroupsWithState...")
+        
+        # Define state update function
+        def update_package_state(package_id: str, events_iter, state: GroupState)-> Iterator[dict]:
+            """
+            Update package state for each package_id group.
+            This function is called for each group of events for a package.
+            """
+            # Initialize state 
+            if state.exists:
+                package_state=state.get()
+
+                if isinstance(package_state,Row):
+                    package_state=package_state.asDict()
+                else:
+                    package_state=dict(package_state)
+            else:
+                package_state = {
+                    "package_id": package_id,
+                    "current_state": None,
+                    "state_history": [],
+                    "first_scan_time": None,
+                    "last_scan_time": None,
+                    "current_location": None,
+                    "last_device_id": None,
+                    "total_scans": 0,
+                    "completed": False,
+                    "completion_time": None,
+                    "processing_timestamp": None
+                }
+            
+            
+            # Process events
+            events_list = list(events_iter)
+            
+            if events_list:
+                # Sort by event_time
+                sorted_events = sorted(events_list, key=lambda x: x["event_time"] if x["event_time"] is not None else "")
+                
+                for event in sorted_events:
+                    # Update package state
+                    package_state["total_scans"] += 1
+                    package_state["last_scan_time"] = event["event_time"]
+                    package_state["current_state"] = event["scan_type"]
+                    package_state["current_location"] = event["location_id"]
+                    package_state["last_device_id"] = event["device_id"]
+                    package_state["state_history"].append(event["scan_type"])
+                    
+                    if not package_state["first_scan_time"]:
+                        package_state["first_scan_time"] = event["event_time"]
+                    
+                    if event["scan_type"] == "delivered":
+                        package_state["completed"] = True
+                        package_state["completion_time"] = event["event_time"]
+                
+            # Update state
+            package_state["processing_timestamp"] = str(datetime.now())
+            state.update(package_state)
+            
+            # Timeout after 1 hour of inactivity
+            state.setTimeoutDuration("1 hour")
+            
+            # Return the updated state
+            yield package_state
+        
+        # Read from Kafka
+        raw_stream = self.spark.readStream \
+            .format("kafka") \
+            .option("kafka.bootstrap.servers", self.bootstrap_servers) \
+            .option("subscribe", self.input_topic) \
+            .option("startingOffsets", "latest") \
+            .option("failOnDataLoss", "false") \
+            .load()
+        
+        # Parse events
+        parsed_stream = self._parse_events(raw_stream)
+
+
+        #make sure the columns we need are present and non-null for grouping 
+        events_for_state=(
+        parsed_stream
+        .filter(col("package_id").isNotNull())
+        .select(
+            "package_id",
+            "scan_type",
+            "location_id",
+            "device_id",
+            "event_time",
+            
+        )
+    )
+        
+        # Apply state processing using mapGroupsWithState
+        state_stream = parsed_stream \
+            .groupByKey(lambda row: row["package_id"]) \
+            .flatMapGroupsWithState(
+                func=update_package_state,
+                outputMode="update",
+                timeoutConf=GroupStateTimeout.ProcessingTimeTimeout
+            )
+        
+        # Convert state to DataFrame
+        state_df = self.spark.createDataFrame(
+            state_stream.rdd,
+            schema=self.state_schema
+        )
+        
+        # Write to Kafka
+        kafka_query = state_df.select(
+            to_json(
+                struct(
+                    col("package_id"),
+                    col("current_state"),
+                    col("state_history"),
+                    col("first_scan_time"),
+                    col("last_scan_time"),
+                    col("current_location"),
+                    col("last_device_id"),
+                    col("total_scans"),
+                    col("completed"),
+                    col("completion_time"),
+                    col("processing_timestamp")
+                )
+            ).alias("value"),
+            col("package_id").alias("key")
+        ).writeStream \
+            .format("kafka") \
+            .option("kafka.bootstrap.servers", self.bootstrap_servers) \
+            .option("topic", self.output_topic) \
+            .option("checkpointLocation", f"{self.checkpoint_location}/kafka_output") \
+            .outputMode("update") \
+            .trigger(processingTime="5 seconds") \
+            .start()
+        
+        # Write to Redis and DynamoDB using foreachBatch
+        def write_to_external_systems(df, batch_id):
+            if df.count() > 0:
+                state_rdd = df.rdd
+                state_rdd.foreachPartition(
+                    lambda partition: self._write_to_redis_partition(
+                        partition,
+                        self.redis_host,
+                        self.redis_port,
+                        self.redis_db,
+                        self.redis_password
+                    )
+                )
+                state_rdd.foreachPartition(
+                    lambda partition: self._write_to_dynamodb_partition(
+                        partition,
+                        self.dynamodb_table_name,
+                        self.dynamodb_region
+                    )
+                )
+
+        external_writes_query = state_df.writeStream \
+            .foreachBatch(write_to_external_systems) \
+            .outputMode("update") \
+            .trigger(processingTime="5 seconds") \
+            .start()
+
+        return kafka_query, external_writes_query
+        
+    
+    def process_with_foreach_batch_and_external_writes(self):
+        """
+        Combine streaming with batch processing for external system writes.
+        """
+        from datetime import datetime
+        
+        logger.info("Starting State Processing Pipeline with external writes...")
+        
+        # Read from Kafka
+        raw_stream = self.spark.readStream \
+            .format("kafka") \
+            .option("kafka.bootstrap.servers", self.bootstrap_servers) \
+            .option("subscribe", self.input_topic) \
+            .option("startingOffsets", "latest") \
+            .option("failOnDataLoss", "false") \
+            .load()
+        
+        # Parse events
+        parsed_stream = self._parse_events(raw_stream)
+        
+        # Process each batch
+        def process_batch(df, batch_id):
+            if df.count() == 0:
+                return
+            
+            logger.info(f"Processing batch {batch_id} with {df.count()} events")
+            
+            # Update state
+            state_df = self._update_package_state(df)
+            
+            if state_df.count() > 0:
+
+                state_rdd=state_df.rdd
+                # Write to Kafka
+                self._write_to_kafka_batch(state_df, batch_id)
+                
+                # Write to Redis
+                state_rdd.foreachPartition(
+                    lambda partition: self._write_to_redis_partition(
+                        partition,
+                        self.redis_host,
+                        self.redis_port,
+                        self.redis_db,
+                        self.redis_password
+                    )
+                )
+                
+                # Write to DynamoDB
+                state_rdd.foreachPartition(
+                    lambda partition: self._write_to_dynamodb_partition(
+                        partition,
+                        self.dynamodb_table_name,
+                        self.dynamodb_region
+                    )
+                )
+                
+                # Log summary
+                completed = state_df.filter(col("completed") == True).count()
+                in_progress = state_df.count() - completed
+                logger.info(f"Batch {batch_id}: {completed} completed, {in_progress} in-progress packages")
+        
+        # Start streaming
+        query = parsed_stream.writeStream \
+            .foreachBatch(process_batch) \
+            .option("checkpointLocation", f"{self.checkpoint_location}/state_processing") \
+            .trigger(processingTime="10 seconds") \
+            .start()
+        
+        return query
+    
+    def run_pipeline(self):
+        """
+        Run the complete state processing pipeline.
+        """
+        logger.info("=" * 80)
+        logger.info("Starting Package Tracking State Processing Pipeline")
+        logger.info(f"Input topic: {self.input_topic}")
+        logger.info(f"Output topic: {self.output_topic}")
+        logger.info(f"Redis: {self.redis_host}:{self.redis_port}")
+        logger.info(f"DynamoDB table: {self.dynamodb_table_name}")
+        logger.info("=" * 80)
+        
+        # Choose processing method
+        # Option 1: foreachBatch (recommended for external system writes)
+        query = self.process_with_foreach_batch_and_external_writes()
+        
+        
+        return query
+
+
+class StreamingQueryMonitor(StreamingQueryListener):
+    """Monitor streaming queries and log their progress."""
+    
+    def onQueryStarted(self, event):
+        logger.info(f"Query started: {event.name} - {event.id}")
+    
+    def onQueryProgress(self, event):
+        if event.progress.numInputRows > 0:
+            logger.info(f"Query {event.name}: processed {event.progress.numInputRows} rows, "
+                       f"batch duration: {event.progress.batchDuration}ms")
+    
+    def onQueryTerminated(self, event):
+        if event.exception:
+            logger.error(f"Query terminated with error: {event.exception}")
+        else:
+            logger.info(f"Query terminated: {event.id}")
+
+
+def main():
+    """Main entry point for the state processing pipeline."""
+    
+    # Configuration
+    KAFKA_BROKER = "localhost:9092"
+    INPUT_TOPIC = "validated-package-scans"
+    OUTPUT_TOPIC = "state-processed-data"
+    
+    REDIS_HOST = "localhost"
+    REDIS_PORT = 6379
+    REDIS_DB = 0
+    
+    DYNAMODB_TABLE = "package-tracking-state"
+    CHECKPOINT_LOCATION = "/tmp/checkpoints/state_processing"
+    
+    # Optional: Spark configurations
+    spark_config = {
+        "spark.sql.streaming.stateStore.providerClass": 
+            "org.apache.spark.sql.execution.streaming.state.HDFSBackedStateStoreProvider",
+        "spark.sql.streaming.stateStore.compression.codec": "lz4",
+        "spark.sql.streaming.noDataProgressEventInterval": "10s"
+    }
+    
+    # Initialize pipeline
+    pipeline = PackageStateProcessor(
+        bootstrap_servers=KAFKA_BROKER,
+        input_topic=INPUT_TOPIC,
+        output_topic=OUTPUT_TOPIC,
+        redis_host=REDIS_HOST,
+        redis_port=REDIS_PORT,
+        redis_db=REDIS_DB,
+        dynamodb_table=DYNAMODB_TABLE,
+        checkpoint_location=CHECKPOINT_LOCATION,
+        spark_config=spark_config
+    )
+    
+    # Add streaming listener
+    monitor = StreamingQueryMonitor()
+    pipeline.spark.streams.addListener(monitor)
+    
+    try:
+        # Run pipeline
+        query = pipeline.run_pipeline()
+        
+        logger.info("Pipeline started. Waiting for termination...")
+        query.awaitTermination()
+        
+    except KeyboardInterrupt:
+        logger.info("Pipeline stopped by user")
+    except Exception as e:
+        logger.error(f"Pipeline error: {e}")
+        raise
+
+
+if __name__ == "__main__":
+    from datetime import datetime
+    main()
