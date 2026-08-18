@@ -1,0 +1,53 @@
+groups:
+  - name: kafka_alerts
+    rules:
+
+      # Broker down
+      - alert: KafkaBrokerDown
+        expr: kafka_brokers < 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kafka broker is down"
+          description: "No Kafka brokers are reachable. All producers and consumers are affected."
+
+      # High consumer lag — fraud detection falling behind
+      - alert: KafkaConsumerLagHigh
+        expr: kafka_consumergroup_lag > 10000
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Kafka consumer lag is high ({{ $value }} messages)"
+          description: "Consumer group {{ $labels.consumergroup }} on topic {{ $labels.topic }} is {{ $value }} messages behind."
+
+      # Critical consumer lag — pipeline is seriously behind
+      - alert: KafkaConsumerLagCritical
+        expr: kafka_consumergroup_lag > 100000
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kafka consumer lag is critical ({{ $value }} messages)"
+          description: "Fraud detection pipeline is critically behind on topic {{ $labels.topic }}."
+
+      # Topic has no active partitions
+      - alert: KafkaTopicNoActivePartitions
+        expr: kafka_topic_partitions{topic=~".*_raw"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Kafka topic {{ $labels.topic }} has no partitions"
+          description: "Raw topic {{ $labels.topic }} has no active partitions — producers cannot write."
+
+      # No messages being produced
+      - alert: KafkaNoMessagesProduced
+        expr: rate(kafka_topic_partition_current_offset{topic=~".*_raw"}[5m]) == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No messages produced to {{ $labels.topic }} in 5 minutes"
+          description: "Producer for {{ $labels.topic }} may be down or stalled."

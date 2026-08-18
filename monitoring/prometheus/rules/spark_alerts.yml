@@ -1,0 +1,30 @@
+groups:
+  - name: spark_alerts
+    rules:
+
+      - alert: SparkMasterDown
+        expr: absent(up{job="spark"})
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Spark master is down"
+          description: "Spark master is unreachable. All streaming jobs are affected."
+
+      - alert: SparkNoWorkers
+        expr: spark_workers_alive < 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "No Spark workers are alive"
+          description: "Spark cluster has no alive workers. Fraud detection jobs cannot run."
+
+      - alert: SparkWorkerLost
+        expr: spark_workers_alive < 2
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Spark worker count dropped below 2 ({{ $value }} alive)"
+          description: "A Spark worker may have crashed. Processing capacity is reduced."

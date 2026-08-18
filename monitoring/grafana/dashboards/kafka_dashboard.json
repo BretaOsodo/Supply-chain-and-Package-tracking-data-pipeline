@@ -1,0 +1,175 @@
+{
+    "title":  "Kafka - Fraud Detection Pipeline",
+    "uid":  "kafka-fraud-pipeline",
+    "timezone":  "browser",
+    "refresh":  "10s",
+    "panels":  [
+                   {
+                       "id":  1,
+                       "title":  "Kafka Brokers Online",
+                       "type":  "stat",
+                       "gridPos":  {
+                                       "x":  0,
+                                       "y":  0,
+                                       "w":  4,
+                                       "h":  4
+                                   },
+                       "targets":  [
+                                       {
+                                           "expr":  "kafka_brokers",
+                                           "legendFormat":  "Brokers",
+                                           "datasource":  {
+                                                              "type":  "prometheus",
+                                                              "uid":  "PB125CF2E8749F955"
+                                                          }
+                                       }
+                                   ],
+                       "options":  {
+                                       "colorMode":  "background"
+                                   },
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "thresholds":  {
+                                                                               "steps":  [
+                                                                                             {
+                                                                                                 "color":  "red",
+                                                                                                 "value":  0
+                                                                                             },
+                                                                                             {
+                                                                                                 "color":  "green",
+                                                                                                 "value":  1
+                                                                                             }
+                                                                                         ]
+                                                                           }
+                                                        }
+                                       },
+                       "datasource":  {
+                                          "type":  "prometheus",
+                                          "uid":  "PB125CF2E8749F955"
+                                      }
+                   },
+                   {
+                       "id":  2,
+                       "title":  "Messages Produced per Second (All Raw Topics)",
+                       "type":  "timeseries",
+                       "gridPos":  {
+                                       "x":  4,
+                                       "y":  0,
+                                       "w":  20,
+                                       "h":  8
+                                   },
+                       "targets":  [
+                                       {
+                                           "expr":  "rate(kafka_topic_partition_current_offset{topic=~\".*_raw\"}[1m])",
+                                           "legendFormat":  "{{ topic }}",
+                                           "datasource":  {
+                                                              "type":  "prometheus",
+                                                              "uid":  "PB125CF2E8749F955"
+                                                          }
+                                       }
+                                   ],
+                       "datasource":  {
+                                          "type":  "prometheus",
+                                          "uid":  "PB125CF2E8749F955"
+                                      }
+                   },
+                   {
+                       "id":  3,
+                       "title":  "Consumer Group Lag by Topic",
+                       "type":  "timeseries",
+                       "gridPos":  {
+                                       "x":  0,
+                                       "y":  8,
+                                       "w":  24,
+                                       "h":  8
+                                   },
+                       "targets":  [
+                                       {
+                                           "expr":  "kafka_consumergroup_lag",
+                                           "legendFormat":  "{{ consumergroup }} - {{ topic }}",
+                                           "datasource":  {
+                                                              "type":  "prometheus",
+                                                              "uid":  "PB125CF2E8749F955"
+                                                          }
+                                       }
+                                   ],
+                       "datasource":  {
+                                          "type":  "prometheus",
+                                          "uid":  "PB125CF2E8749F955"
+                                      }
+                   },
+                   {
+                       "id":  4,
+                       "title":  "Topic Partitions",
+                       "type":  "table",
+                       "gridPos":  {
+                                       "x":  0,
+                                       "y":  16,
+                                       "w":  12,
+                                       "h":  8
+                                   },
+                       "targets":  [
+                                       {
+                                           "expr":  "kafka_topic_partitions",
+                                           "legendFormat":  "{{ topic }}",
+                                           "instant":  true,
+                                           "datasource":  {
+                                                              "type":  "prometheus",
+                                                              "uid":  "PB125CF2E8749F955"
+                                                          }
+                                       }
+                                   ],
+                       "datasource":  {
+                                          "type":  "prometheus",
+                                          "uid":  "PB125CF2E8749F955"
+                                      }
+                   },
+                   {
+                       "id":  5,
+                       "title":  "Consumer Lag per Raw Topic",
+                       "type":  "bargauge",
+                       "gridPos":  {
+                                       "x":  12,
+                                       "y":  16,
+                                       "w":  12,
+                                       "h":  8
+                                   },
+                       "targets":  [
+                                       {
+                                           "expr":  "sum by (topic) (kafka_consumergroup_lag{topic=~\".*_raw\"})",
+                                           "legendFormat":  "{{ topic }}",
+                                           "instant":  true,
+                                           "datasource":  {
+                                                              "type":  "prometheus",
+                                                              "uid":  "PB125CF2E8749F955"
+                                                          }
+                                       }
+                                   ],
+                       "fieldConfig":  {
+                                           "defaults":  {
+                                                            "thresholds":  {
+                                                                               "steps":  [
+                                                                                             {
+                                                                                                 "color":  "green",
+                                                                                                 "value":  0
+                                                                                             },
+                                                                                             {
+                                                                                                 "color":  "yellow",
+                                                                                                 "value":  1000
+                                                                                             },
+                                                                                             {
+                                                                                                 "color":  "red",
+                                                                                                 "value":  10000
+                                                                                             }
+                                                                                         ]
+                                                                           }
+                                                        }
+                                       },
+                       "datasource":  {
+                                          "type":  "prometheus",
+                                          "uid":  "PB125CF2E8749F955"
+                                      }
+                   }
+               ],
+    "schemaVersion":  38
+}

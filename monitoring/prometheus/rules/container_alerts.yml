@@ -1,0 +1,39 @@
+groups:
+  - name: container_alerts
+    rules:
+
+      - alert: ContainerDown
+        expr: absent(container_last_seen{name=~"kafka|spark-master|spark-worker|broker|coordinator|historical|middlemanager|postgres|grafana|prometheus"})
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Container {{ $labels.name }} is down"
+          description: "Container {{ $labels.name }} has not been seen for over 1 minute."
+
+      - alert: ContainerHighCPU
+        expr: rate(container_cpu_usage_seconds_total{name!=""}[2m]) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} CPU usage is {{ $value }}%"
+          description: "Container {{ $labels.name }} has been using more than 80% CPU for 5 minutes."
+
+      - alert: ContainerHighMemory
+        expr: (container_memory_usage_bytes{name!=""} / container_spec_memory_limit_bytes{name!=""}) * 100 > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Container {{ $labels.name }} memory usage is {{ $value }}%"
+          description: "Container {{ $labels.name }} is using more than 80% of its memory limit."
+
+      - alert: ContainerOOMKilled
+        expr: kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Container {{ $labels.container }} was OOM killed"
+          description: "Container ran out of memory and was killed."
