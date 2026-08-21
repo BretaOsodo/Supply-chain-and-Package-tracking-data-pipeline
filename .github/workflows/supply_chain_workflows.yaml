@@ -31,12 +31,49 @@ jobs:
                 echo " ENC secrets (masked): $AWS_ACCESS_KEY"
     
     intergration-test:
+        name: Integration Test
         runs-on: ubuntu-latest
+
+        environment:
+            name: production
 
         steps:
             - name: Checkout repository
               uses: actions/checkout@v4
 
+            - name: Create CI environment file 
+              env: 
+                 AWS_SECRET_KEY: ${{ secrets.AWS_SECRET_KEY }}
+                 AWS_ACCESS_KEY: ${{ secrets.AWS_ACCESS_KEY }}
+                 CONTAINER_PORT: ${{ secrets.CONTAINER_PORT }}
+                 DOCKER_CONTAINER: ${{ secrets.DOCKER_CONTAINER }}
+                 DOCKER_IMAGE: ${{ secrets.DOCKER_IMAGE }}
+                 HOST_PORT: ${{ secrets.HOST_PORT }}
+                 PGADMIN_EMAIL: ${{ secrets.PDADMIN_EMAIL }}
+                 PGADMIN_PASSWORD: ${{ secrets.PGADMIN_PASSWORD}}
+                 PGADMIN_PORT: ${{ secrets.PGADMIN_PORT }}
+                 POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+                 POSTGRESS_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+                 POSTGRES_SCHEMA: ${{ secrets.POSTGRES_SCHEMA }}
+                 POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+                 REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+              run: |
+                cat > .env <<EOF
+                 AWS_SECRET_KEY: ${{ secrets.AWS_SECRET_KEY }}
+                AWS_ACCESS_KEY: ${{ secrets.AWS_ACCESS_KEY }}
+                CONTAINER_PORT: ${{ secrets.CONTAINER_PORT }}
+                DOCKER_CONTAINER: ${{ secrets.DOCKER_CONTAINER }}
+                DOCKER_IMAGE: ${{ secrets.DOCKER_IMAGE }}
+                HOST_PORT: ${{ secrets.HOST_PORT }}
+                PGADMIN_EMAIL: ${{ secrets.PDADMIN_EMAIL }}
+                PGADMIN_PASSWORD: ${{ secrets.PGADMIN_PASSWORD}}
+                PGADMIN_PORT: ${{ secrets.PGADMIN_PORT }}
+                POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+                POSTGRESS_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+                POSTGRES_SCHEMA: ${{ secrets.POSTGRES_SCHEMA }}
+                POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+                REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+                
             - name: start Dcoker compose 
               run: docker compose up -d
 
@@ -52,4 +89,4 @@ jobs:
             - name: Show logs 
               if: failure()
               run: |
-                docker compose logs --no--color
+                docker compose logs --no-color
