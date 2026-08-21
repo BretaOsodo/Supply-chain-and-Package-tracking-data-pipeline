@@ -35,7 +35,7 @@ jobs:
 
         steps:
             - name: Checkout repository
-              uses: actions/checkout@4
+              uses: actions/checkout@v4
 
             - name: start Dcoker compose 
               run: docker compose up -d
