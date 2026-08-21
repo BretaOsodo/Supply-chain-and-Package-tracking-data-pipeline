@@ -582,13 +582,16 @@ class PackageStateProcessor:
                 
         # Process state
         def process_batch(df, batch_id):
-            if df.count() == 0:
+            if df.isEmpty():
                 return
             
-            logger.info(f"Processing batch {batch_id} with {df.count()} events")
             
             # Update state
             state_df = self._update_package_state(df)
+
+            #cache to prevent recomputing for every downstream action 
+
+            state_df.cache()
 
             if state_df.count() > 0:
 
@@ -618,9 +621,25 @@ class PackageStateProcessor:
                 # Write to Kafka
                 self._write_to_kafka_batch(state_df, batch_id)
 
-                completed = state_df.filter(col("completed") == True).count()
-                in_progress = state_df.count() - completed
-                logger.info(f"Batch {batch_id}: {completed} completed, {in_progress} in-progress packages")
+                #stats: single aggregation 
+                stats=state_df.agg(
+                    count("*").alias("total"),
+                    sum(
+                        when(col("completed")==True,1  
+                             ).otherwise(0)
+                    ).alias("completed")
+                ).collect()[0]
+
+                completed = stats["completed"]
+                in_progress = stats["total"]-completed
+
+                logger.info(
+                    f"Batch {batch_id}: {completed} completed, "
+                    f"{in_progress} in-progress packages"
+                )
+
+                #free memory before nect trigger
+                state_df.unpersisit(blocking=False)
 
         query = parsed_stream.writeStream \
             .foreachBatch(process_batch) \
@@ -992,8 +1011,10 @@ class StreamingQueryMonitor(StreamingQueryListener):
         logger.info(f"Query started: {event.name} - {event.id}")
     
     def onQueryProgress(self, event):
-        if event.progress.numInputRows > 0:
-            logger.info(f"Query {event.name}: processed {event.progress.numInputRows} rows, "
+        progress = event.progress
+        if progress.numInputRows > 0:
+            logger.info(f"Query {progress.name}: processed {progress.numInputRows} rows, "
+                        f"rate = {progress.inputRowsPerSecond:.2f} rows/sec,"
                        f"batch duration: {event.progress.batchDuration}ms")
     
     def onQueryTerminated(self, event):
