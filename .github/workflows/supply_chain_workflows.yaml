@@ -1,10 +1,32 @@
-name: Hello World
+name: supply-chain-workflow
 
 on:
-  workflow_dispatch:
-
+    push:
+        branches:
+            - main
 jobs:
-  say-hello-inline-bash:
-    runs-on: ubuntu-24.04
-    steps:
-      - run: echo "Hello from an inline bash script in a GitHub Action Workflow!"
+    production-environment:
+        runs-on: ubuntu-latest
+        environment: production
+        env:
+            AWS_SECRET_KEY: ${{ secrets.AWS_SECRET_KEY }}
+            AWS_ACCESS_KEY: ${{ secrets.AWS_ACCESS_KEY }}
+            CONTAINER_PORT: ${{ secrets.CONTAINER_PORT }}
+            DOCKER_CONTAINER: ${{ secrets.DOCKER_CONTAINER }}
+            DOCKER_IMAGE: ${{ secrets.DOCKER_IMAGE }}
+            HOST_PORT: ${{ secrets.HOST_PORT }}
+            PGADMIN_EMAIL: ${{ secrets.PDADMIN_EMAIL }}
+            PGADMIN_PASSWORD: ${{ secrets.PGADMIN_PASSWORD}}
+            PGADMIN_PORT: ${{ secrets.PGADMIN_PORT }}
+            POSTGRES_DB: ${{ secrets.POSTGRES_DB }}
+            POSTGRESS_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+            POSTGRES_SCHEMA: ${{ secrets.POSTGRES_SCHEMA }}
+            POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
+            REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+
+        steps:
+            - name: Inspect the values inside the job 
+              run: |
+                echo "Env secrets (masked):    $AWS_SECRET_KEY"
+                echo " ENC secrets (masked): $AWS_ACCESS_KEY"
+    
