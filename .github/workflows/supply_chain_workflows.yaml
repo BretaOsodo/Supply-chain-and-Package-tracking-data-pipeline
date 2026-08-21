@@ -30,3 +30,21 @@ jobs:
                 echo "Env secrets (masked):    $AWS_SECRET_KEY"
                 echo " ENC secrets (masked): $AWS_ACCESS_KEY"
     
+    intergration-test:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@4
+
+            - name: start Dcoker compose 
+              run: docker compose up -d
+
+            - name: check running containers
+              run: docker ps
+            
+            - name: Wait for services 
+              run: sleep 30
+              
+            - name: Run test to test
+              run: pytest test/ -v -x
