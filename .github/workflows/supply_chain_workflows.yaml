@@ -48,3 +48,8 @@ jobs:
               
             - name: Run test to test
               run: pytest test/ -v -x
+
+            - name: Show logs 
+              if: failure()
+              run: |
+                docker compose logs --no--color
