@@ -73,7 +73,10 @@ jobs:
                 POSTGRES_SCHEMA: ${{ secrets.POSTGRES_SCHEMA }}
                 POSTGRES_USER: ${{ secrets.POSTGRES_USER }}
                 REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
-                
+
+            - name: create docker network
+              run: docker network create supply_chain
+
             - name: start Dcoker compose 
               run: docker compose up -d
 
