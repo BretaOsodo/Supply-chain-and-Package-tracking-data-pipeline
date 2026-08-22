@@ -154,9 +154,7 @@ class Package:
 
         if self.current_state_index < len(SCAN_TYPES) -1:
             self.current_state_index +=1
-            if self.current_state_index== len(SCAN_TYPES)-1:
-                self.is_complete=True
-            return True 
+            return True
         return False 
 
     def get_state_name(self)-> str:
@@ -249,11 +247,15 @@ class scannerDevice:
         scan_type_out= scan_type
 
         if is_malformed:
+            if scan_type=="picked":
             #randomly choose a malformation type 
-            error_choice = random.choice([
-               "bad_prefix", "null_location", "bad_scan_type" 
-            ])
-
+                error_choice = random.choice([
+                "bad_prefix", "null_location" 
+                ])
+            else:
+                error_choice = random.choice([
+                    "bad_prefix","null_location","bad_scan_type"
+                ])
             if error_choice=="bad_prefix":
 
                 #replace hyphen with underscore or remove prefix 
@@ -450,76 +452,82 @@ class PackageEventGenerator:
                     return random.choice(available_scanners)
         
         return None
+    def _get_scanner_for_state(self,scan_type: str,scanner_type_hint:Optional[str]=None) -> Optional[scannerDevice]:
+        candidate= []
+        for s in self.scanners.values():
+            if scanner_type_hint and s.scanner_type != scanner_type_hint:
+                continue
+            config= DEFAULT_SCANNER_CONFIG.get(s.scanner_type,{})
+            if scan_type in config.get("scan_types",[]):
+                candidate.append(s)
+        return random.choice(candidate) if candidate else None
+
+    
     def _process_package_step(self, package: Package) -> Optional[ScanEvent]:
-        """
-        Process one step for a package (generate next scan event).
-        
-        Args:
-            package: Package to process
-            
-        Returns:
-            ScanEvent or None if package is complete or no scanner available
-        """
         if package.is_complete:
             return None
 
-        #Enforce: First scan must be "picked" from a warehouse scanner 
-        next_scan=package.get_next_scan_type()
-        if next_scan=="picked":
-            warehouse_scanners=[
-                s for s in self.scanners.values() 
-                if s.scanner_type == 'warehouse'
-            ]
-            if not warehouse_scanners:
-                return None 
-            scanner= random.choice(warehouse_scanners)
+        next_scan = package.get_next_scan_type()
+        if next_scan is None:
+            return None
+
+        # Enforce: First scan must be "picked" from warehouse
+        if package.current_state_index == 0:
+            scanner = self._get_scanner_for_state("picked", scanner_type_hint="warehouse")
         else:
-            scanner= self._get_scanner_for_packages(package)
+            scanner = self._get_scanner_for_state(next_scan)
 
         if scanner is None:
             return None
-        
-        
-        # Generate scan
+
         event = scanner.generate_scan(package)
-        
+
         if event:
-            #validate that the first step must be "Picked"
-            if package.current_state_index== 0 and event.scan_type != "picked":
+            # Validate first event
+            if package.current_state_index == 0 and event.scan_type != "picked":
                 raise RuntimeError(
-                    f"Package {package.package_id} first event was {event.scan_type}, "
+                    f"Package {package.package_id}: first event was '{event.scan_type}', "
                     f"expected 'picked'"
                 )
-            # Update package state
+
             event_time = datetime.strptime(event.event_time, "%Y-%m-%dT%H:%M:%SZ")
             package.last_event_time = event_time
             
-            # Advance package state
-            package.advance_state()
-            
-            if package.is_complete:
+            # If we can't, we're at "delivered" and done.
+            advanced = package.advance_state()
+            if not advanced:
+                package.is_complete = True
+
+            if package.is_complete and package in self.active_packages:
                 self.active_packages.remove(package)
                 self.completed_packages.append(package)
-            
+
             return event
-        
+
         return None
 
     def _process_buffered_events(self) -> List[ScanEvent]:
-        """
-        Flush buffered events from all scanners.
-        Simulates delayed uploads from offline devices.
-        
-        Returns:
-            List of buffered events (with original timestamps)
-        """
         all_buffered = []
         for scanner in self.scanners.values():
             buffered = scanner.flush_buffer()
-            all_buffered.extend(buffered)
-        
-        # Randomly flush buffers based on probability of reconnection
-        # Some scanners might stay offline longer
+            for event in buffered:
+                pkg = self.packages.get(event.package_id)
+                if pkg and not pkg.is_complete:
+                    expected_next = pkg.get_next_scan_type()
+                    if event.scan_type == expected_next:
+                        event_time = datetime.strptime(
+                            event.event_time, "%Y-%m-%dT%H:%M:%SZ"
+                        )
+                        pkg.last_event_time = event_time
+                        
+                        advanced = pkg.advance_state()
+                        if not advanced:
+                            pkg.is_complete = True
+                        
+                        if pkg.is_complete and pkg in self.active_packages:
+                            self.active_packages.remove(pkg)
+                            self.completed_packages.append(pkg)
+                all_buffered.append(event)
         return all_buffered
     
     def generate_batch(self, max_events: Optional[int] = None) -> List[ScanEvent]:
@@ -535,7 +543,7 @@ class PackageEventGenerator:
         """
         events = []
         attempts = 0
-        max_attempts = max_events * 3 if max_events else 10000
+        max_attempts = max_events * 3 if max_events else self.num_packages * 50
         
         while (max_events is None or len(events) < max_events) and self.active_packages:
             # Process active packages
@@ -549,7 +557,7 @@ class PackageEventGenerator:
                         break
                 
                 # Randomly process buffered events
-                if random.random() < 0.1:  # 10% chance per iteration
+                if random.random() < 0.1 or not max_events:  # 10% chance per iteration
                     buffered = self._process_buffered_events()
                     events.extend(buffered)
             
@@ -639,7 +647,7 @@ class PackageEventGenerator:
             "malformed_percentage": (malformed / total_events * 100) if total_events > 0 else 0,
             "events_by_scanner_type": dict(by_scanner_type),
             "scanner_stats": {
-                device_id: scanner.get_stats() 
+                device_id: scanner.get_status() 
                 for device_id, scanner in self.scanners.items()
             }
         }

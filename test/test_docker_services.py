@@ -204,9 +204,9 @@ class TestSchemaRegistry:
 class TestKafdrop:
     def test_kafdrop_port_is_open(self):
         """
-        Kafdrop should be listening on port 9000
+        Kafdrop should be listening on port 9020
         """
-        assert wait_for_port("127.0.0.1",9000, timeout=60), "Kafdrop is not listening on port 9000"
+        assert wait_for_port("127.0.0.1",9020, timeout=60), "Kafdrop is not listening on port 9020"
 
     def test_kafdrop_http(self):
         """
