@@ -113,7 +113,7 @@ class ScanEvent:
         Convert to JSON string
         """
         import json
-        return json.dumps(self.to_dict)
+        return json.dumps(self.to_dict())
 
     def is_valid(self)-> bool:
         """
@@ -323,7 +323,7 @@ class scannerDevice:
             "total_scans":self.total_scans,
             "offline_scans":self.offline_scans,
             "buffer_size":len(self.buffer),
-            "is_offline":self.self.is_offline
+            "is_offline":self.is_offline
         }
 
 #EVENT GENERATOR 
@@ -419,7 +419,7 @@ class PackageEventGenerator:
                 is_complete=False
             )
 
-            self.packages[pkg_id]=self.packages
+            self.packages[pkg_id]=package
             self.active_packages.append(package)
 
         print(f"[Generator] Created {self.num_packages} packages")
@@ -462,16 +462,34 @@ class PackageEventGenerator:
         """
         if package.is_complete:
             return None
-        
-        # Get appropriate scanner
-        scanner = self._get_scanner_for_packages(package)
+
+        #Enforce: First scan must be "picked" from a warehouse scanner 
+        next_scan=package.get_next_scan_type()
+        if next_scan=="picked":
+            warehouse_scanners=[
+                s for s in self.scanners.values() 
+                if s.scanner_type == 'warehouse'
+            ]
+            if not warehouse_scanners:
+                return None 
+            scanner= random.choice(warehouse_scanners)
+        else:
+            scanner= self._get_scanner_for_packages(package)
+
         if scanner is None:
             return None
+        
         
         # Generate scan
         event = scanner.generate_scan(package)
         
         if event:
+            #validate that the first step must be "Picked"
+            if package.current_state_index== 0 and event.scan_type != "picked":
+                raise RuntimeError(
+                    f"Package {package.package_id} first event was {event.scan_type}, "
+                    f"expected 'picked'"
+                )
             # Update package state
             event_time = datetime.strptime(event.event_time, "%Y-%m-%dT%H:%M:%SZ")
             package.last_event_time = event_time
