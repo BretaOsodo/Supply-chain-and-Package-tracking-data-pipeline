@@ -1,0 +1,244 @@
+version: "3"
+
+env:
+  PROJECT_NAME: enterprise-supply-chain-and-package-tracking-data-pipeline
+  SPARK_MASTER_URL: spark://spark-master:7077
+  KAFKA_INTERNAL_BROKERS: kafka1:29092,kafka2:29092
+  # gum style defaults
+  BORDER: double
+  BORDER_FOREGROUND: "212"
+  PADDING: "1 1"
+  MARGIN: "1 1"
+
+vars:
+  SERVICE: '{{.SERVICE | default "spark-master"}}'
+  TOPIC: '{{.TOPIC | default "scan-events"}}'
+  PARTITIONS: '{{.PARTITIONS | default "10"}}'
+  REPLICATION: '{{.REPLICATION | default "2"}}'
+  JOB: '{{.JOB | default "validation_job.py"}}'
+  APP_ID: '{{.APP_ID}}'
+
+tasks:
+
+  
+  # Docker lifecycle
+
+
+  docker:up:
+    cmds:
+      - docker compose up -d
+    desc: Start the full stack in the background
+
+  docker:down:
+    cmds:
+      - docker compose down
+    desc: Stop the full stack (containers only, volumes preserved)
+
+  docker:build:
+    cmds:
+      - docker compose build {{.SERVICE}}
+    desc: "Build one service's image (default: spark-master). Pass SERVICE=spark-worker1 etc."
+
+  docker:rebuild:
+    cmds:
+      - docker compose build {{.SERVICE}}
+      - docker compose up -d --force-recreate {{.SERVICE}}
+    desc: "Rebuild and recreate one service. Pass SERVICE=<name>."
+
+  docker:ps:
+    cmds:
+      - docker compose ps
+    desc: Show status of all services
+
+  docker:logs:
+    cmds:
+      - docker compose logs -f --tail 100 {{.SERVICE}}
+    desc: "Tail logs for one service (default: spark-master). Pass SERVICE=<name>."
+
+  docker:restart:
+    cmds:
+      - docker compose restart {{.SERVICE}}
+    desc: "Restart one service. Pass SERVICE=<name>."
+
+  docker:config-check:
+    cmds:
+      - docker compose config
+    desc: Render the fully merged compose config -- use to catch port collisions and typos before `up`
+
+  docker:clean:
+    prompt: This will remove all containers AND volumes (Postgres, Kafka, Grafana data). Continue?
+    cmds:
+      - docker compose down -v
+    desc: Tear down the stack and delete all volumes -- destructive, asks for confirmation
+
+  # 
+  # Kafka
+  # 
+
+  kafka:topics:
+    cmds:
+      - docker exec kafka1 kafka-topics --bootstrap-server kafka1:29092 --list
+    desc: List all Kafka topics
+
+  kafka:create-topic:
+    cmds:
+      - |
+        docker exec kafka1 kafka-topics --bootstrap-server kafka1:29092 \
+          --create --topic {{.TOPIC}} \
+          --partitions {{.PARTITIONS}} \
+          --replication-factor {{.REPLICATION}}
+    desc: "Create a topic. Pass TOPIC=<name> PARTITIONS=<n> REPLICATION=<n> (defaults: scan-events, 10, 2)."
+
+  kafka:describe-topic:
+    cmds:
+      - docker exec kafka1 kafka-topics --bootstrap-server kafka1:29092 --describe --topic {{.TOPIC}}
+    desc: "Describe a topic's partitions and config. Pass TOPIC=<name>."
+
+  kafka:consumer-groups:
+    cmds:
+      - docker exec kafka1 kafka-consumer-groups --bootstrap-server kafka1:29092 --list
+    desc: List all consumer groups
+
+  kafka:consumer-lag:
+    cmds:
+      - docker exec kafka1 kafka-consumer-groups --bootstrap-server kafka1:29092 --describe --group {{.GROUP}}
+    desc: "Show lag for a consumer group. Pass GROUP=<name>."
+
+  kafka:setup-topics:
+    cmds:
+      - task: kafka:create-topic
+        vars: { TOPIC: scan-events, PARTITIONS: 30 }
+      - task: kafka:create-topic
+        vars: { TOPIC: scan-events-validated, PARTITIONS: 30 }
+      - task: kafka:create-topic
+        vars: { TOPIC: scan-events-dlq, PARTITIONS: 10 }
+      - task: kafka:create-topic
+        vars: { TOPIC: state-processed-data, PARTITIONS: 30 }
+      - task: kafka:create-topic
+        vars: { TOPIC: eta-calculated-data, PARTITIONS: 10 }
+    desc: Create all pipeline topics with sensible partition counts
+
+  # 
+  # Spark jobs
+  # 
+
+  spark:submit:
+    cmds:
+      - docker exec spark-master spark-submit --master {{.SPARK_MASTER_URL}} --total-executor-cores 2 /spark/{{.JOB}}
+    desc: "Submit a Spark job. Pass JOB=<filename.py> (default: validation_job.py)."
+
+  spark:submit-validation:
+    cmds:
+      - task: spark:submit
+        vars: { JOB: validation_job.py }
+    desc: Submit the validation job
+
+  spark:submit-state-processing:
+    cmds:
+      - task: spark:submit
+        vars: { JOB: state_processing_job.py }
+    desc: Submit the state processing job
+
+  spark:submit-eta-calculator:
+    cmds:
+      - task: spark:submit
+        vars: { JOB: eta_calculator_job.py }
+    desc: Submit the ETA calculator job
+
+  spark:submit-delay-detector:
+    cmds:
+      - task: spark:submit
+        vars: { JOB: delay_detector_job.py }
+    desc: Submit the delay detector job
+
+  spark:submit-analytics-aggregator:
+    cmds:
+      - task: spark:submit
+        vars: { JOB: analytics_aggregator_job.py }
+    desc: Submit the analytics aggregator job
+
+  spark:apps:
+    cmds:
+      - cmd: gum style "Open the Spark Master UI to see running/completed apps: http://127.0.0.1:9090"
+        silent: true
+    desc: Print the Spark Master UI URL
+
+  spark:kill-app:
+    cmds:
+      - docker exec spark-master spark-submit --master {{.SPARK_MASTER_URL}} --kill {{.APP_ID}}
+    desc: "Kill a running Spark application. Pass APP_ID=<app-id> (find it via spark:apps or the Master UI)."
+
+  # 
+  # Data generator
+  # 
+
+  generator:run:
+    cmds:
+      - uv run python data_generator/generated_data.py --packages {{.PACKAGES | default "40"}}
+    desc: "Generate a finite batch of events. Pass PACKAGES=<n> (default: 40)."
+
+  generator:stream:
+    cmds:
+      - uv run python data_generator/generated_data.py --stream --packages {{.PACKAGES | default "100"}} --batch-size {{.BATCH_SIZE | default "5"}} --delay {{.DELAY | default "1.0"}}
+    desc: "Continuously stream events. Pass PACKAGES=, BATCH_SIZE=, DELAY= to override."
+
+  # 
+  # Tests
+  # 
+
+  test:unit:
+    cmds:
+      - uv run pytest test/ -v
+    desc: Run unit tests (data generator, state machine, etc.) -- no Docker services required
+
+  test:services:
+    cmds:
+      - uv run pytest test/test_docker_services.py -v
+    desc: Run smoke tests against the live Docker stack -- run `task docker:up` first
+
+  test:all:
+    cmds:
+      - task: test:unit
+      - task: test:services
+    desc: Run the full test suite
+
+  # 
+  # Monitoring / UI shortcuts
+  # 
+
+  urls:
+    cmds:
+      - cmd: |
+          gum style "$(cat <<EOF
+          Spark Master UI    http://127.0.0.1:9090
+          Kafdrop (Kafka UI) http://127.0.0.1:9000
+          Prometheus         http://127.0.0.1:9096
+          Grafana            http://127.0.0.1:3000
+          pgAdmin            http://127.0.0.1:5050
+          Schema Registry    http://127.0.0.1:8082
+          cAdvisor           http://127.0.0.1:8080
+          EOF
+          )"
+        silent: true
+    desc: Print all local service URLs
+
+  # 
+  # Full setup
+  # 
+
+  setup:all:
+    cmds:
+      - task: docker:build
+        vars: { SERVICE: spark-master }
+      - task: docker:build
+        vars: { SERVICE: spark-worker1 }
+      - task: docker:build
+        vars: { SERVICE: spark-worker2 }
+      - task: docker:up
+      - cmd: gum style "Waiting 45s for Kafka brokers and Spark workers to come up..."
+        silent: true
+      - sleep 45
+      - task: kafka:setup-topics
+      - task: docker:ps
+      - task: urls
+    desc: Build images, start the stack, create topics, and print service URLs -- run this first on a fresh checkout
