@@ -147,7 +147,7 @@ services:
             - spark://spark-master:7077
 
         ports:
-            - "127.0.0.1:9091:8081"
+            - "127.0.0.1:9100:8081"
         volumes:
             - ./spark:/spark
 
@@ -179,6 +179,125 @@ services:
 
         ports:
             - "127.0.0.1:9095:8081"
+
+        depends_on:
+            - spark-master
+
+        environment:
+            - SPARK_WORKER_MEMORY=4g
+            - SPARK_WORKER_CORES=2
+            - SPARK_MODE=worker
+            - SPARK_MASTER=spark://spark-master:7077
+
+        volumes:
+            - ./spark:/spark    
+        networks:
+            - supply_chain
+        restart: unless-stopped
+
+    spark-worker3:
+        build:
+            context: ./spark
+            dockerfile: Dockerfile
+
+        container_name: spark-worker3
+        hostname: spark-worker3
+        command:
+            - /opt/spark/bin/spark-class
+            - org.apache.spark.deploy.worker.Worker
+            - spark://spark-master:7077
+
+        ports:
+            - "127.0.0.1:9097:8081"
+
+        depends_on:
+            - spark-master
+
+        environment:
+            - SPARK_WORKER_MEMORY=4g
+            - SPARK_WORKER_CORES=2
+            - SPARK_MODE=worker
+            - SPARK_MASTER=spark://spark-master:7077
+
+        volumes:
+            - ./spark:/spark    
+        networks:
+            - supply_chain
+        restart: unless-stopped
+    spark-worker4:
+        build:
+            context: ./spark
+            dockerfile: Dockerfile
+
+        container_name: spark-worker4
+        hostname: spark-worker4
+        command:
+            - /opt/spark/bin/spark-class
+            - org.apache.spark.deploy.worker.Worker
+            - spark://spark-master:7077
+
+        ports:
+            - "127.0.0.1:9098:8081"
+
+        depends_on:
+            - spark-master
+
+        environment:
+            - SPARK_WORKER_MEMORY=4g
+            - SPARK_WORKER_CORES=2
+            - SPARK_MODE=worker
+            - SPARK_MASTER=spark://spark-master:7077
+
+        volumes:
+            - ./spark:/spark    
+        networks:
+            - supply_chain
+        restart: unless-stopped
+
+    spark-worker5:
+        build:
+            context: ./spark
+            dockerfile: Dockerfile
+
+        container_name: spark-worker5
+        hostname: spark-worker5
+        command:
+            - /opt/spark/bin/spark-class
+            - org.apache.spark.deploy.worker.Worker
+            - spark://spark-master:7077
+
+        ports:
+            - "127.0.0.1:9099:8081"
+
+        depends_on:
+            - spark-master
+
+        environment:
+            - SPARK_WORKER_MEMORY=4g
+            - SPARK_WORKER_CORES=2
+            - SPARK_MODE=worker
+            - SPARK_MASTER=spark://spark-master:7077
+
+        volumes:
+            - ./spark:/spark    
+        networks:
+            - supply_chain
+        restart: unless-stopped
+
+    spark-worker6:
+        build:
+            context: ./spark
+            dockerfile: Dockerfile
+
+        container_name: spark-worker6
+        hostname: spark-worker6
+        command:
+            - /opt/spark/bin/spark-class
+            - org.apache.spark.deploy.worker.Worker
+            - spark://spark-master:7077
+
+        ports:
+            - "127.0.0.1:9101:8081"
 
         depends_on:
             - spark-master

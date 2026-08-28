@@ -2,6 +2,7 @@ import json
 import logging 
 import math 
 import random
+import builtins
 from datetime import datetime,timedelta,timezone
 from typing import Dict, Optional, Tuple,Iterator,List
 from dataclasses import dataclass, asdict 
@@ -11,7 +12,10 @@ from config import config
 
 from pyspark.sql import SparkSession
 from pyspark.sql.types import *
-from pyspark.sql.functions import *
+from pyspark.sql.functions import (
+    col, from_json, struct, to_json, lit, when,
+    current_timestamp, explode, collect_list, array
+)
 from pyspark.sql.streaming import StreamingQueryListener 
 
 import redis
@@ -42,7 +46,7 @@ class ETAcalculation:
         return asdict(self)
 
     def to_json(self)-> str:
-        return json.dumps(self.to_dict,default=str)
+        return json.dumps(self.to_dict(),default=str)
 
 @dataclass
 class LocationInfo:
@@ -75,7 +79,7 @@ class ETAcalculator:
         self.redis_host=redis_host
         self.redis_port=redis_port
         self.redis_password=redis_password
-        self.redis_database=redis_db
+        self.redis_db=redis_db
         self.checkpoint_location = checkpoint_location
         self.spark_config = spark_config
 
@@ -265,13 +269,13 @@ class ETAcalculator:
         state_multiplier=config.STATE_TIME_MULTIPLIERS.get(current_state,1.0)
 
         #apply zone adjustement
-        zone_adjustment= config.ZONE_TIME_ADJUSTMENTS.get(loc_info,1.0)
+        zone_adjustment= config.ZONE_TIME_ADJUSTMENTS.get(loc_info.zone,1.0)
 
         #apply peak hour adjustment 
-        peak_adjustment =self._calculat_peak_hour_adjustment(last_scan_time)
+        peak_adjustment =self._calculate_peak_hour_adjustment(last_scan_time)
 
         #apply scan history adjustement 
-        history_adjustment= min(1+(total_scans-1)* 0.05 , 1.5)
+        history_adjustment= builtins.min(1+(total_scans-1)* 0.05 , 1.5)
 
         #calculaye final ETA hours 
         eta_hours= base_time * state_multiplier*zone_adjustment*peak_adjustment/history_adjustment
@@ -299,23 +303,20 @@ class ETAcalculator:
             estimated_route.append("delivered")
 
         #build time factor breakdown 
-        time_factors={
+        time_factors = {
             "base_time": base_time,
             "state_multiplier": state_multiplier,
             "zone_adjustment": zone_adjustment,
             "peak_adjustment": peak_adjustment,
-            "history_adjustment": history_adjustment,
-            "zone": loc_info.zone,
-            "city": loc_info.city_name
+            "history_adjustment": history_adjustment
         }
-
         return {
             "package_id": package_id,
             "current_state": current_state,
             "current_location": current_location,
-            "predicted_delivery_time": predicted_delivery.isoformat() + "Z",
-            "eta_hours": round(eta_hours, 2),
-            "confidence_score": round(confidence_score, 3),
+            "predicted_delivery_time": predicted_delivery.isoformat().replace("+00.00","Z"),
+            "eta_hours": builtins.round(eta_hours, 2),
+            "confidence_score": builtins.round(confidence_score, 3),
             "estimated_route": estimated_route,
             "time_factors": time_factors,
             "calculation_timestamp": datetime.now(timezone.utc).isoformat()
@@ -335,16 +336,16 @@ class ETAcalculator:
             base += 3.0
         elif state == "in_transit":
             # On the road, remaining transit
-            base = max(base * 0.5, 1.0)
+            base = builtins.max(base * 0.5, 1.0)
         elif state == "out_for_delivery":
             # Almost there!
-            base = max(base * 0.2, 0.5)
+            base = builtins.max(base * 0.2, 0.5)
 
         #Add random variation
         variation=1.0 + (random.random() -0.5)*0.3
         base *= variation 
 
-        return max(base,0.5) #minimum 30 minutes 
+        return builtins.max(base,0.5) #minimum 30 minutes 
 
     def _calculate_peak_hour_adjustment(self,last_scan_time:str)-> float:
         try:
@@ -364,10 +365,10 @@ class ETAcalculator:
 
     def _calculate_confidence(self,total_scans:int, history_length:int,state:str,zone:str)-> float:
         # More scans = higher confidence
-        scan_confidence = min(total_scans / 5.0, 1.0)
+        scan_confidence = builtins.min(total_scans / 5.0, 1.0)
         
         # History length confidence
-        history_confidence = min(history_length / 3.0, 1.0)
+        history_confidence = builtins.min(history_length / 3.0, 1.0)
         
         # State confidence
         state_confidence = {
@@ -395,7 +396,7 @@ class ETAcalculator:
             zone_confidence * 0.2
         )
         
-        return min(confidence, 1.0)
+        return builtins.min(confidence, 1.0)
 
     def _write_to_redis_partition(self,iterator: Iterator[Dict])->None:
         import redis
@@ -510,7 +511,7 @@ class ETAcalculator:
             
             # Calculate on driver
             rows = df.collect()
-            eta_results = [self._calculate_eta(row.asDict(recursive=True)) for row in rows]
+            eta_results = [self._calculate_eta(row.asDict()) for row in rows]
             
             if not eta_results:
                 return
@@ -535,14 +536,17 @@ class ETAcalculator:
             redis_port = self.redis_port
             redis_db = self.redis_db
             redis_password = self.redis_password
-            
-            def write_redis_partition(iterator):
-                import redis, json
+
+            def write_to_redis(eta_results_list):
                 try:
                     client = redis.Redis(
-                        host=redis_host, port=redis_port, db=redis_db,
-                        password=redis_password, decode_responses=True,
-                        socket_connect_timeout=5, socket_timeout=5
+                        host=self.redis_host,
+                        port=self.redis_port,
+                        db=self.redis_db,
+                        password=self.redis_password,
+                        decode_responses=True,
+                        socket_connect_timeout=5,
+                        socket_timeout=5
                     )
                     client.ping()
                 except Exception as e:
@@ -551,20 +555,59 @@ class ETAcalculator:
                 
                 pipe = client.pipeline()
                 count = 0
-                for eta_data in iterator:
-                    pkg_id = eta_data["package_id"]
-                    pipe.setex(f"eta:package:{pkg_id}", 86400*7, json.dumps(eta_data))
-                    # ... rest of your redis logic ...
-                    count += 1
-                    if count >= 100:
+                
+                for eta_data in eta_results_list:
+                    try:
+                        pkg_id = eta_data["package_id"]
+                        
+                        # Store full ETA JSON
+                        pipe.setex(f"eta:package:{pkg_id}", 86400 * 7, json.dumps(eta_data))
+                        
+                        # Store hash fields
+                        pipe.hset(f"eta:package:{pkg_id}:fields", mapping={
+                            "current_state": eta_data.get("current_state", ""),
+                            "eta_hours": str(eta_data.get("eta_hours", 0)),
+                            "predicted_delivery_time": eta_data.get("predicted_delivery_time", ""),
+                            "confidence_score": str(eta_data.get("confidence_score", 0)),
+                            "current_location": eta_data.get("current_location", ""),
+                            "calculation_timestamp": eta_data.get("calculation_timestamp", "")
+                        })
+                        
+                        # Indexes
+                        state = eta_data.get("current_state", "unknown")
+                        zone = eta_data.get("time_factors", {}).get("zone", "unknown")
+                        confidence = eta_data.get("confidence_score", 0)
+                        
+                        pipe.sadd("eta:all", pkg_id)
+                        pipe.sadd(f"eta:state:{state}", pkg_id)
+                        pipe.sadd(f"eta:zone:{zone}", pkg_id)
+                        
+                        if confidence >= 0.8:
+                            pipe.sadd("eta:confidence:high", pkg_id)
+                        elif confidence >= 0.5:
+                            pipe.sadd("eta:confidence:medium", pkg_id)
+                        else:
+                            pipe.sadd("eta:confidence:low", pkg_id)
+                        
+                        count += 1
+                        if count >= 100:
+                            pipe.execute()
+                            pipe = client.pipeline()
+                            count = 0
+                            
+                    except Exception as e:
+                        logger.error(f"Failed to write ETA for {pkg_id}: {e}")
+                
+                if count > 0:
+                    try:
                         pipe.execute()
-                        pipe = client.pipeline()
-                        count = 0
-                if count:
-                    pipe.execute()
+                    except Exception as e:
+                        logger.error(f"Final Redis pipeline failed: {e}")
+                
                 client.close()
             
-            eta_df.rdd.foreachPartition(write_redis_partition)
+            # Call it directly with the list
+            write_to_redis(eta_results)
 
         query = parsed_stream.writeStream \
             .foreachBatch(process_batch) \
@@ -572,21 +615,21 @@ class ETAcalculator:
             .trigger(processingTime="10 seconds") \
             .queryName("eta-calculator") \
             .start()
+        return query
             
     def run_pipeline(self):
         """Run the complete ETA calculator pipeline."""
-        kafka_query, redis_query = self.process_stream()
+        query = self.process_stream()
         
         logger.info("ETA Calculator pipelines started. Waiting for termination...")
         
         # Wait for both queries
         try:
             # Wait for kafka query
-            kafka_query.awaitTermination()
+            query.awaitTermination()
         except KeyboardInterrupt:
             logger.info("Stopping ETA Calculator...")
-            kafka_query.stop()
-            redis_query.stop()
+            query.stop()
             logger.info("ETA Calculator stopped")
 
 class StreamingQueryMonitor(StreamingQueryListener):

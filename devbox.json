@@ -1,5 +1,5 @@
 {
-  "$schema":  "https://raw.githubusercontent.com/jetify-com/devbox/0.18.0/.schema/devbox.schema.json",
+  "$schema": "https://raw.githubusercontent.com/jetify-com/devbox/0.18.0/.schema/devbox.schema.json",
   "packages": [
     "act@latest",
     "civo@latest",
@@ -18,11 +18,9 @@
     "kubent@latest",
     "kubernetes-helm@latest",
     "kustomize@latest",
-    "nodejs_20@latest",
     "oras@latest",
-    "path:gcloud#google-cloud-sdk",
+    "google-cloud-sdk@latest",
     "poetry@latest",
-    "procps",
     "python312@latest",
     "tilt@latest",
     "yq-go@latest"
