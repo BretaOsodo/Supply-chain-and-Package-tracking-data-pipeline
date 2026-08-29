@@ -159,7 +159,7 @@ tasks:
 
   spark:apps:
     cmds:
-      - cmd: gum style "Open the Spark Master UI to see running/completed apps: http://127.0.0.1:9090"
+      - cmd: gum style "Open the Spark Master UI to see running/completed apps http://127.0.0.1:9090"
         silent: true
     desc: Print the Spark Master UI URL
 
