@@ -20,10 +20,6 @@ vars:
 
 tasks:
 
-  
-  # Docker lifecycle
-
-
   docker:up:
     cmds:
       - docker compose up -d
