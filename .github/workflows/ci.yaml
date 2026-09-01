@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    name: Test python Code
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkpoint repository
+        uses: actions/checkout@v4
+
+      - name: Set up python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Upgrade pip
+        run: |
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+      - name: Install test dependencies
+        run: |
+          pip install pytest pytest-cov
+
+      - name: Run tests
+        run: |
+          pytest tests/ -v -x
+  docker:
+    name: Validate Docker Configurations
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: checkpoint repository
+        uses: actions/checkout@v4
+
+      - name: Validate Docker compose
+        run: |
+          docker compose config
+      - name: Build Spark image
+        run: |
+          docker compose build spark-master
+
+  docker-build:
+    name: Build Project images
+    runs-on: ubuntu-latest
+    needs: docker
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build docker images
+        run: |
+          docker compose build
