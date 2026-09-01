@@ -33,7 +33,7 @@ jobs:
 
       - name: Run tests
         run: |
-          pytest tests/ -v -x
+          pytest test/ -v -x
   docker:
     name: Validate Docker Configurations
     runs-on: ubuntu-latest
