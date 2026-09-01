@@ -1,6 +1,6 @@
-
+#!/usr/bin/env python3
 """
-
+Package Delay Detector — Production-Ready PySpark Structured Streaming Job
 
 Reads state-processed package events from Kafka, checks actual scan times
 against ETA data in Redis, and publishes delay notifications to Kafka.
@@ -28,10 +28,12 @@ from pyspark.sql.functions import (
 
 import redis
 
+# ============================================================================
 # Configuration
+# ============================================================================
 
 KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "kafka1:29092,kafka2:29092")
-INPUT_TOPIC = os.getenv("INPUT_TOPIC", "state-processed")
+INPUT_TOPIC = os.getenv("INPUT_TOPIC", "state-processed-data")
 OUTPUT_TOPIC = os.getenv("OUTPUT_TOPIC", "delay-notifications")
 DLQ_TOPIC = os.getenv("DLQ_TOPIC", "delay-detector-dlq")
 CHECKPOINT_LOCATION = os.getenv("CHECKPOINT_LOCATION", "/spark/checkpoints/delay_detector")
@@ -44,9 +46,9 @@ REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
 REDIS_DB = int(os.getenv("REDIS_DB", "0"))
 REDIS_PASSWORD = os.getenv("REDIS_PASSWORD", None)
 
-
+# ============================================================================
 # Logging (driver-side only)
-
+# ============================================================================
 
 logging.basicConfig(
     level=logging.INFO,
@@ -54,10 +56,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# ============================================================================
 # Schemas
+# ============================================================================
 
-
-# Input: state-processed events (exact schema you provided)
+# Input: state-processed events
 INPUT_SCHEMA = StructType([
     StructField("package_id", StringType(), True),
     StructField("current_state", StringType(), True),
@@ -85,15 +88,15 @@ NOTIFICATION_SCHEMA = StructType([
     StructField("detected_at", TimestampType(), False)
 ])
 
+# ============================================================================
 # Executor-Side Helpers (module-level for Spark serialization)
-
+# ============================================================================
 
 def parse_iso8601(ts_str: str) -> Optional[datetime]:
     """Parse ISO 8601 timestamp to Python datetime."""
     if not ts_str:
         return None
     try:
-        # Python < 3.11 does not accept 'Z'; replace with explicit UTC offset
         if ts_str.endswith("Z"):
             ts_str = ts_str[:-1] + "+00:00"
         return datetime.fromisoformat(ts_str)
@@ -108,13 +111,8 @@ def process_partition(
 ) -> Iterator[Dict[str, Any]]:
     """
     Executor-side delay detection with batched Redis Pipeline lookups.
-
-    Why mapPartitions?
-      - One Redis connection per partition (not per row).
-      - Pipeline batches all HGETALL commands into a single network round-trip.
-      - Keeps all processing distributed; no data is collected to the driver.
     """
-    # 1. Materialize partition rows into plain dicts
+    # Materialize partition rows into plain dicts
     rows = []
     for row in partition_iter:
         try:
@@ -125,7 +123,7 @@ def process_partition(
     if not rows:
         return iter([])
 
-    # 2. Open Redis connection for this partition
+    # Open Redis connection for this partition
     try:
         client = redis.Redis(
             host=redis_cfg["host"],
@@ -140,10 +138,9 @@ def process_partition(
         )
         client.ping()
     except Exception:
-        # Redis unreachable: skip this entire partition gracefully
         return iter([])
 
-    # 3. Build aligned list of rows that have a package_id
+    # Build aligned list of rows that have a package_id
     valid_rows = []
     package_ids = []
     for r in rows:
@@ -156,7 +153,7 @@ def process_partition(
         client.close()
         return iter([])
 
-    # 4. Batch lookup via Redis Pipeline (single round-trip)
+    # Batch lookup via Redis Pipeline (single round-trip)
     pipe = client.pipeline()
     for pid in package_ids:
         pipe.hgetall(f"eta:{pid}")
@@ -167,7 +164,7 @@ def process_partition(
         client.close()
         return iter([])
 
-    # 5. Detect delays
+    # Detect delays
     notifications = []
     for row, eta_data in zip(valid_rows, results):
         try:
@@ -188,7 +185,6 @@ def process_partition(
             if delay_minutes <= delay_threshold:
                 continue
 
-            # Severity tiers
             if delay_minutes > 240:
                 severity = "CRITICAL"
                 msg = f"Package is critically delayed by {delay_minutes} minutes (>4 hours)"
@@ -216,16 +212,15 @@ def process_partition(
             })
 
         except Exception:
-            # Unrecoverable per-record error: skip silently (do not crash partition)
             continue
 
     client.close()
     return iter(notifications)
 
 
-
+# ============================================================================
 # Driver-Side Job Class
-
+# ============================================================================
 
 class DelayDetectorJob:
     def __init__(self):
@@ -252,7 +247,7 @@ class DelayDetectorJob:
             .format("kafka") \
             .option("kafka.bootstrap.servers", KAFKA_BROKERS) \
             .option("subscribe", INPUT_TOPIC) \
-            .option("startingOffsets", "latest") \
+            .option("startingOffsets", "earliest") \
             .option("failOnDataLoss", "false") \
             .option("maxOffsetsPerTrigger", "50000") \
             .load()
@@ -261,13 +256,13 @@ class DelayDetectorJob:
         """
         foreachBatch logic:
           1. Parse JSON (PERMISSIVE).
-          2. Route corrupt/missing records to DLQ.
+          2. Route unparseable or invalid records to DLQ.
           3. Detect delays via mapPartitions + Redis Pipeline.
           4. Write notifications and DLQ to Kafka.
         """
-        # 
+        # ---------------------------------------------------------------------
         # Parse raw Kafka values
-        # 
+        # ---------------------------------------------------------------------
         parsed = df.select(
             from_json(
                 col("value").cast("string"),
@@ -277,34 +272,41 @@ class DelayDetectorJob:
             col("value").cast("string").alias("raw_value")
         )
 
-        # 
-        # DLQ: corrupt JSON or missing required fields
-        # 
+        # ---------------------------------------------------------------------
+        # DLQ: unparseable JSON (data is null) or missing required fields
+        # ---------------------------------------------------------------------
+        # NOTE: In PERMISSIVE mode, _corrupt_record is NOT guaranteed to exist
+        # in the schema unless a record is actually corrupt. We check for:
+        #   1. data IS NULL  -> completely unparseable JSON
+        #   2. data.package_id IS NULL  -> missing required field
+        #   3. data.last_scan_time IS NULL  -> missing required field
+        # ---------------------------------------------------------------------
         dlq_df = parsed.filter(
-            (col("data._corrupt_record").isNotNull()) |
-            (col("data.package_id").isNull()) |
-            (col("data.last_scan_time").isNull())
+            col("data").isNull() |
+            col("data.package_id").isNull() |
+            col("data.last_scan_time").isNull()
         ).select(
             to_json(struct(
                 col("raw_value").alias("original_record"),
                 lit("PARSE_ERROR").alias("error_type"),
-                lit("Corrupt JSON or missing package_id/last_scan_time").alias("error_message"),
+                lit("Unparseable JSON or missing package_id/last_scan_time").alias("error_message"),
                 current_timestamp().alias("timestamp")
             )).alias("value"),
             lit(None).cast("string").alias("key")
         )
 
-        
+        # ---------------------------------------------------------------------
         # Valid records for delay detection
-        
+        # ---------------------------------------------------------------------
         good_df = parsed.filter(
-            (col("data._corrupt_record").isNull()) &
-            (col("data.package_id").isNotNull()) &
-            (col("data.last_scan_time").isNotNull())
+            col("data").isNotNull() &
+            col("data.package_id").isNotNull() &
+            col("data.last_scan_time").isNotNull()
         ).select("data.*")
 
+        # ---------------------------------------------------------------------
         # Distributed delay detection (no data collected to driver)
-        
+        # ---------------------------------------------------------------------
         redis_cfg = self.redis_config
         threshold = DELAY_THRESHOLD_MINUTES
 
@@ -317,9 +319,9 @@ class DelayDetectorJob:
             schema=NOTIFICATION_SCHEMA
         )
 
-    
+        # ---------------------------------------------------------------------
         # Write notifications to Kafka
-
+        # ---------------------------------------------------------------------
         notification_df.select(
             to_json(struct(
                 col("package_id"),
@@ -343,7 +345,9 @@ class DelayDetectorJob:
             .mode("append") \
             .save()
 
+        # ---------------------------------------------------------------------
         # Write DLQ to Kafka
+        # ---------------------------------------------------------------------
         dlq_df.write \
             .format("kafka") \
             .option("kafka.bootstrap.servers", KAFKA_BROKERS) \
@@ -352,9 +356,9 @@ class DelayDetectorJob:
             .mode("append") \
             .save()
 
-        
-        # Metrics logging (optional; triggers small post-write jobs)
-        
+        # ---------------------------------------------------------------------
+        # Metrics logging
+        # ---------------------------------------------------------------------
         notif_count = notification_df.count()
         dlq_count = dlq_df.count()
         if notif_count > 0:
@@ -384,9 +388,9 @@ class DelayDetectorJob:
         query.awaitTermination()
 
 
-
+# ============================================================================
 # Entry Point
-
+# ============================================================================
 
 def main():
     job = DelayDetectorJob()

@@ -2,6 +2,7 @@ import json
 import logging 
 from datetime import datetime, timezone
 import os
+import builtins
 
 import redis 
 from pyspark.sql import SparkSession, Row
@@ -257,7 +258,7 @@ class PackageStateProcessor:
             dynamodb_table: str = "package-tracking",
             dynamodb_region: str = "eu-north-1",
             dynamodb_endpoint: str="http://dynamodb-local:8000",
-            checkpoint_location: str = "/spark/checkpoints/state_processor",
+            checkpoint_location: str = "/spark/checkpoints/state_processed",
             watermark_delay: str = "2 hours",
             state_timeout: str = "7 days",
             spark_config: dict = None):
