@@ -12,7 +12,6 @@ jobs:
   docker:
     name: Validate Docker Configurations
     runs-on: ubuntu-latest
-    needs: test
 
     steps:
       - name: checkpoint repository
@@ -39,6 +38,7 @@ jobs:
   test:
     name: Test python Code
     runs-on: ubuntu-latest
+    needs: docker-build
 
     steps:
       - name: Checkpoint repository
