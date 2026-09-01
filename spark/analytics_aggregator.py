@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+
 """
 Analytics Aggregator — PySpark Structured Streaming Job
 
@@ -31,9 +31,9 @@ from pyspark.sql.functions import (
 # Configuration
 # 
 
-KAFKA_BROKERS = os.getenv("KAFKA_BROKERS", "localhost:9092")
+KAFKA_BROKERS = "kafka1:29092,kafka2:29092"
 INPUT_TOPIC = os.getenv("INPUT_TOPIC", "state-processed-data")
-CHECKPOINT_LOCATION = os.getenv("CHECKPOINT_LOCATION", "s3://bucket/checkpoints/analytics-aggregator")
+CHECKPOINT_LOCATION = "/spark/checkpoints/analytics"
 
 # PostgreSQL Configuration
 POSTGRES_HOST = os.getenv("POSTGRES_HOST", "postgres")
@@ -167,7 +167,7 @@ class AnalyticsAggregatorJob:
             .format("kafka") \
             .option("kafka.bootstrap.servers", KAFKA_BROKERS) \
             .option("subscribe", INPUT_TOPIC) \
-            .option("startingOffsets", "latest") \
+            .option("startingOffsets", "earliest") \
             .option("failOnDataLoss", "false") \
             .option("maxOffsetsPerTrigger", "50000") \
             .load()
