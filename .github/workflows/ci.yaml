@@ -48,7 +48,17 @@ jobs:
 
       - name: Build docker images
         run: |
-          docker compose build
+          docker compose up -d
+
+      - name: Shw running containers
+        run: |
+          docker compose ps 
+
+      - name : Show Docker logs on failure
+        if: failure()
+        run: |
+          docker compose ps
+
   test:
     name: Test python Code
     runs-on: ubuntu-latest
