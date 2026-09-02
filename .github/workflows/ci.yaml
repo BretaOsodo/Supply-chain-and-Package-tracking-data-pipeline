@@ -37,6 +37,9 @@ jobs:
       - name: Build Spark image
         run: |
           docker compose build spark-master
+      - name: Build the network
+        run: |
+          docker network create supply_chain
       - name: Build docker images
         run: |
           docker compose up -d
