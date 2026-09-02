@@ -16,6 +16,20 @@ jobs:
     steps:
       - name: checkpoint repository
         uses: actions/checkout@v4
+      - name: Create CI environment file
+        run: |
+          cat > .env <<'EOF'
+          PGADMIN_EMAIL=admin@example.com
+          PGADMIN_PASSWORD=ci-password
+          PGADMIN_PORT=5050
+          POSTGRES_SCHEMA=public
+          POSTGRES_USER=postgres
+          POSTGRES_PASSWORD=postgres
+          HOST_PORT=8080
+          AWS_ACCESS_KEY=dummy
+          AWS_SECRET_KEY=dummy
+          AWS_REGION=us-east-1
+          EOF
 
       - name: Validate Docker compose
         run: |
