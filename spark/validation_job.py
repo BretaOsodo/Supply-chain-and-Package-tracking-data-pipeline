@@ -85,48 +85,42 @@ class ValidationPipeline:
         self.validation_rules=self._create_validation_rules()
 
 
-    def _create_spark_session(self,spark_config: dict=None)->SparkSession:
-        """
-        Create spark session with necessary configurations
-        """
-
-        builder = SparkSession.builder\
+    def _create_spark_session(self, spark_config: dict = None) -> SparkSession:
+        builder = SparkSession.builder \
             .appName("PackageTrackingDataValidation") \
             .config("spark.sql.shuffle.partitions", "4") \
-            .config("spark.sql.streaming.stateStore.providerClass", 
-                   "org.apache.spark.sql.execution.streaming.state.HDFSBackedStateStoreProvider") \
+            .config("spark.sql.streaming.stateStore.providerClass",
+                    "org.apache.spark.sql.execution.streaming.state.HDFSBackedStateStoreProvider") \
             .config("spark.sql.streaming.schemaInference", "false") \
             .config("spark.sql.adaptive.enabled", "true") \
             .config("spark.sql.adaptive.coalescePartitions.enabled", "true") \
             .config("spark.sql.streaming.kafka.maxRatePerPartition", "1000") \
             .config("spark.sql.streaming.backpressure.enabled", "true") \
-            .config("spark.sql.streaming.backpressure.initialRate", "100")\
-            .config(
-                "spark.jars.packages",
-                "org.apache.spark:spark-sql-kafka-0-10_2.12:3.4.1,"
-                "org.apache.hadoop:hadoop-aws:3.3.4,"
-                "com.amazonaws:aws-java-sdk-bundle:1.11.1026"
-            )\
-            .config("spark.hadoop.fs.s3a.access.key",os.getenv("AWS_ACCESS_KEY"))\
-            .config("spark.hadoop.fs.s3a.secret.key",os.getenv("AWS_SECRET_KEY"))\
+            .config("spark.sql.streaming.backpressure.initialRate", "100") \
+            .config("spark.hadoop.fs.s3a.access.key", os.getenv("AWS_ACCESS_KEY")) \
+            .config("spark.hadoop.fs.s3a.secret.key", os.getenv("AWS_SECRET_KEY")) \
             .config("spark.sql.legacy.timeParserPolicy", "CORRECTED")
 
-        #add s3/Hadoop configurations
-        builder= builder\
-                .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
-            .config("spark.hadoop.fs.s3a.aws.credentials.provider", 
-                   "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider") \
+        builder = builder \
+            .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem") \
+            .config("spark.hadoop.fs.s3a.aws.credentials.provider",
+                    "org.apache.hadoop.fs.s3a.SimpleAWSCredentialsProvider") \
             .config("spark.hadoop.fs.s3a.multipart.size", "104857600") \
-            .config("spark.hadoop.fs.s3a.max.total.tasks", 
-                "5")
+            .config("spark.hadoop.fs.s3a.max.total.tasks", "5")
 
-        #add custom configuration
         if spark_config:
             for key, value in spark_config.items():
-                builder=builder.config(key,value)
+                builder = builder.config(key, value)
 
-        spark=builder.getOrCreate()
+        spark = builder.getOrCreate()
         spark.sparkContext.setLogLevel("WARN")
+
+        # Diagnostic: confirm Kafka provider is reachable
+        try:
+            spark._jvm.org.apache.spark.sql.kafka010.KafkaSourceProvider
+            logger.info("Kafka connector verified on classpath")
+        except Exception as e:
+            logger.error("Kafka connector NOT on classpath: %s", e)
 
         return spark
 

@@ -9,7 +9,7 @@ logger=logging.getLogger(__name__)
 TOPIC ='package_events'
 
 producer_config = {
-    "bootstrap.servers": "127.0.0.1:9092,127.0.0.1:9093",
+    "bootstrap.servers": "kafka1:29092,kafka2:29092",
     "client.id": "package-events-producer",
     "acks": "all",
     "retries": 5,

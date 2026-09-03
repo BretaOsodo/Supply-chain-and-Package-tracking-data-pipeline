@@ -662,7 +662,7 @@ def main():
     INPUT_TOPIC = "state-processed-data"
     OUTPUT_TOPIC = "eta-calculated-data"
     
-    REDIS_HOST = "127.0.0.1"
+    REDIS_HOST = "redis"
     REDIS_PORT = 6379
     REDIS_DB = 0
     REDIS_PASSWORD = None

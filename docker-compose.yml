@@ -3,10 +3,11 @@ volumes:
     pgadmin-data:
     kafka-data:
     grafana-data:
+    spark-checkpoints:
 
 networks:
     supply_chain:
-        external: true
+        driver: bridge
 
 services:
     kafka1:
@@ -107,6 +108,27 @@ services:
 
         networks:
             - supply_chain
+
+    kafka-producer:
+        build:
+            context: .
+            dockerfile: kafka/Dockerfile
+
+        command:
+            -   python
+            - -m
+            - kafka.streaming
+        environment:
+            KAFKA_BOOTSTRAP_SERVERS: "kafka1:29092,kafka2:29092"
+        depends_on:
+            kafka2:
+                condition: service_healthy
+            kafka1:
+                condition: service_healthy
+        networks:
+            - supply_chain
+
+        restart: "no"
 
     #Spark master services 
     spark-master:
@@ -314,7 +336,339 @@ services:
             - supply_chain
         restart: unless-stopped
 
+    #SPARK VALIDATION JOB
+    spark-validation:
+        build:
+            context: ./spark
+            dockerfile: Dockerfile
+        container_name: spark-validation
+        environment:
+            AWS_ACCESS_KEY: ${AWS_ACCESS_KEY}
+            AWS_SECRET_KEY: ${AWS_SECRET_KEY}
+
+        entrypoint: ["/bin/bash", "-c"]
+
+        command:
+            - |
+                sleep 15
+                /opt/spark/bin/spark-submit \
+                  --master spark://spark-master:7077 \
+                  --deploy-mode client \
+                  --executor-cores 1 \
+                  --executor-memory 1500m \
+                  --conf spark.executor.memoryOverhead=512m \
+                  --conf spark.sql.shuffle.partitions=2 \
+                  --conf spark.default.parallelism=2 \
+                  --conf spark.network.timeout=600s \
+                  --conf spark.cores.max=2 \
+                  --conf spark.driver.extraClassPath=/opt/spark/jars/* \
+                  --conf spark.executor.extraClassPath=/opt/spark/jars/* \
+                  /spark/validation_job.py
+        depends_on:
+            spark-master:
+                condition: service_started
+            spark-worker1:
+                condition: service_started
+            spark-worker2:
+                condition: service_started
+            spark-worker3:
+                condition: service_started
+            spark-worker4:
+                condition: service_started
+            spark-worker5:
+                condition: service_started
+            spark-worker6:
+                condition: service_started
+        networks:
+            - supply_chain
+        restart: unless-stopped
+
+    #state processing Job
+    spark-state-processing-job:
+        build:
+            context: ./spark
+            dockerfile: Dockerfile
+        container_name: spark-state-processing
+
+        entrypoint: ["/bin/bash", "-c"]
+        command:
+            - |
+                sleep 20
+                /opt/spark/bin/spark-submit \
+                    --master spark://spark-master:7077 \
+                    --deploy-mode client \
+                    --executor-cores 1 \
+                    --executor-memory 1500m \
+                    --conf spark.executor.memoryOverhead=512m \
+                    --conf spark.sql.shuffle.partitions=2 \
+                    --conf spark.default.parallelism=2 \
+                    --conf spark.network.timeout=600s \
+                    --conf spark.cores.max=2 \
+                    --conf spark.driver.extraClassPath=/opt/spark/jars/* \
+                    --conf spark.executor.extraClassPath=/opt/spark/jars/* \
+                    /spark/state_processing_job.py
+
+        depends_on:
+            spark-worker6:
+                condition: service_started
+            spark-worker5:
+                condition: service_started
+            spark-worker4:
+                condition: service_started
+            spark-worker3:
+                condition: service_started
+            spark-worker2:
+                condition: service_started
+            spark-worker1:
+                condition: service_started
+            spark-master:
+                condition: service_started
+            spark-validation:
+                condition: service_started
+            redis:
+                condition: service_started
+            dynamodb-local:
+                condition: service_started
+            kafka1:
+                condition: service_started
+            kafka2:
+                condition: service_started
+
+        environment:
+            KAFKA_BROKER: kafka1:29092,kafka2:29092
+            INPUT_TOPIC: scan_events_validated
+            OUTPUT_TOPIC: state-processed-data
+
+            REDIS_HOST: redis
+            REDIS_PORT: 6379
+            REDIS_DB: 0
+
+            DYNAMODB_TABLE: package-tracking-state
+            DYNAMODB_ENDPOINT: http://dynamodb-local:8000
+            AWS_ACCESS_KEY: ${AWS_ACCESS_KEY}
+            AWS_SECRET_KEY: ${AWS_SECRET_KEY}
+            AWS_REGION: ${AWS_REGION}
+
+            CHECKPOINT_LOCATION: /spark/checkpoints/state_processing
+
+        volumes:
+            -   spark-checkpoints:/spark/checkpoints
+        networks:
+            - supply_chain
+        restart: unless-stopped
+    spark-eta-calculator-job:
+        build:
+            context: ./spark
+            dockerfile: Dockerfile
+        container_name: spark-eta-calculator
+
+        entrypoint: ["/bin/bash", "-c"]
+
+        command:
+            - |
+                sleep 30
+                /opt/spark/bin/spark-submit \
+                    --master spark://spark-master:7077 \
+                    --deploy-mode client \
+                    --executor-cores 1 \
+                    --executor-memory 1500m \
+                    --conf spark.executor.memoryOverhead=512m \
+                    --conf spark.sql.shuffle.partitions=2 \
+                    --conf spark.default.parallelism=2 \
+                    --conf spark.network.timeout=600s \
+                    --conf spark.cores.max=2 \
+                    --conf spark.driver.extraClassPath=/opt/spark/jars/* \
+                    --conf spark.executor.extraClassPath=/opt/spark/jars/* \
+                    /spark/eta_calculator_job.py
+
+        depends_on:
+            spark-master:
+                condition: service_started
+
+            spark-worker1:
+                condition: service_started
+
+            spark-worker2:
+                condition: service_started
+
+            spark-state-processing-job:
+                condition: service_started
+
+            spark-worker3:
+                condition: service_started
+
+            spark-worker4:
+                condition: service_started
+
+            spark-worker5:
+                condition: service_started
+
+            spark-worker6:
+                condition: service_started
+
+            redis:
+                condition: service_started
+
+            kafka1:
+                condition: service_healthy
+
+            kafka2:
+                condition: service_healthy
+
+        environment:
+            KAFKA_BROKER: kafka1:29092,kafka2:29092
+
+            INPUT_TOPIC: state-processed-data
+            OUTPUT_TOPIC: eta-calculated-data
+
+            REDIS_HOST: redis
+            REDIS_PORT: 6379
+            REDIS_DB: 0
+            REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+            CHECKPOINT_LOCATION: /spark/checkpoints/eta_calculator
+
+            AWS_ACCESS_KEY: ${AWS_ACCESS_KEY}
+            AWS_SECRET_KEY: ${AWS_SECRET_KEY}
+            AWS_REGION: ${AWS_REGION}
+
+        volumes:
+            -   spark-checkpoints:/spark/checkpoints
+
+        networks:
+            - supply_chain
+
+        restart: unless-stopped
+
+    spark-delay-detector:
+        build:
+            context: ./spark
+            dockerfile: Dockerfile
+
+        container_name: spark-delay-detector
+
+        entrypoint: ["/bin/bash", "-c"]
+
+        command:
+            - |
+                sleep 40
+                /opt/spark/bin/spark-submit \
+                  --master spark://spark-master:7077 \
+                  --deploy-mode client \
+                  --executor-cores 1 \
+                  --executor-memory 1500m \
+                  --conf spark.executor.memoryOverhead=512m \
+                  --conf spark.sql.shuffle.partitions=2 \
+                  --conf spark.default.parallelism=2 \
+                  --conf spark.network.timeout=600s \
+                  --conf spark.cores.max=2 \
+                  --conf spark.driver.extraClassPath=/opt/spark/jars/* \
+                  --conf spark.executor.extraClassPath=/opt/spark/jars/* \
+                  /spark/delay_detector_job.py
+
+        depends_on:
+            spark-master:
+                condition: service_started
+
+            spark-worker1:
+                condition: service_started
+            spark-worker2:
+                condition: service_started
+            spark-worker3:
+                condition: service_started
+
+            spark-worker4:
+                condition: service_started
+            spark-worker5:
+                condition: service_started
+            spark-worker6:
+                condition: service_started
+            spark-state-processing-job:
+                condition: service_started
+            kafka1:
+                condition: service_healthy
+            kafka2:
+                condition: service_healthy
+        environment:
+            KAFKA_BROKERS: kafka1:29092,kafka2:29092
+
+            INPUT_TOPIC: state-processed-data
+            OUTPUT_TOPIC: delay-notifications
+            DLQ_TOPIC: delay-detector-dlq
+
+            CHECKPOINT_LOCATION: /spark/checkpoints/delay_detector
+
+            DELAY_THRESHOLD_MINUTES: 15
+            TRIGGER_INTERVAL: "30 seconds"
+
+            REDIS_HOST: redis
+            REDIS_PORT: 6379
+            REDIS_DB: 0
+            REDIS_PASSWORD: ${REDIS_PASSWORD}
+
+        volumes:
+            -   spark-checkpoints:/spark/checkpoints
+        networks:
+            - supply_chain
+        restart: unless-stopped
+    #spark analytics aggregator
+    spark-analytics-aggregator:
+        build:
+            context: ./spark
+            dockerfile: Dockerfile
+
+        container_name: spark-analytics-aggregator
+
+        entrypoint: ["/bin/bash", "-c"]
+
+
+        command:
+            - |
+                sleep 40
+                /opt/spark/bin/spark-submit \
+                  --master spark://spark-master:7077 \
+                  --deploy-mode client \
+                  --executor-cores 1 \
+                  --executor-memory 1500m \
+                  --conf spark.executor.memoryOverhead=512m \
+                  --conf spark.sql.shuffle.partitions=2 \
+                  --conf spark.default.parallelism=2 \
+                  --conf spark.network.timeout=600s \
+                  --conf spark.cores.max=2 \
+                  --conf spark.driver.extraClassPath=/opt/spark/jars/* \
+                  --conf spark.executor.extraClassPath=/opt/spark/jars/* \
+                  /spark/analytics_aggregator.py
+
+        depends_on:
+            spark-state-processing-job:
+                condition: service_started
+            spark-master:
+                condition: service_started
+            spark-worker1:
+                condition: service_started
+            spark-worker2:
+                condition: service_started
+
+            spark-worker3:
+                condition: service_started
+            spark-worker5:
+                condition: service_started
+            spark-worker6:
+                condition: service_started
+            spark-worker4:
+                condition: service_started
+            kafka2:
+                condition: service_healthy
+            kafka1:
+                condition: service_healthy
+
+        volumes:
+            -   spark-checkpoints:/spark/checkpoints
+        networks:
+            - supply_chain
+        restart: unless-stopped
     #prometheus service for monitoring
+
     prometheus:
         image: prom/prometheus:latest
         container_name: prometheus
@@ -444,3 +798,5 @@ services:
         command: ["-jar", "DynamoDBLocal.jar", "-inMemory"]
         networks:
             - supply_chain
+
+
