@@ -1,14 +1,22 @@
 
 data "aws_ami" "debian" {
   most_recent = true
-  owners = ["237124340255"]
+  owners      = ["136693071363"]
 
   filter {
-    name = "name"
-    values = ["debain-12-amd64-*"]
+    name   = "name"
+    values = ["debian-12-amd64-*"]
   }
   filter {
-    name = "virtualization-type"
+    name   = "architecture"
+    values = ["x86_64"]
+  }
+  filter {
+    name   = "root-device-type"
+    values = ["ebs"]
+  }
+  filter {
+    name   = "virtualization-type"
     values = ["hvm"]
   }
 }
@@ -16,10 +24,10 @@ data "aws_ami" "debian" {
 #EC2 Instance
 
 resource "aws_instance" "this" {
-  ami = data.aws_ami.debian.id
-  instance_type = var.instance_type
-  key_name = var.key_name
-  iam_instance_profile = aws_iam_instance_profile.ec2.name
+  ami                    = data.aws_ami.debian.id
+  instance_type          = var.instance_type
+  key_name               = var.key_name
+  iam_instance_profile   = aws_iam_instance_profile.ec2.name
   vpc_security_group_ids = [aws_security_group.pipeline.id]
 
   root_block_device {

@@ -9,12 +9,12 @@ terraform {
     }
   }
 
-  backend "s3" {
-    bucket = "supply-chain-tf-state"
-    key = "terraform/terraform.tfstate"
-    region = "eu-north-1"
-    dynamodb_table = "supply-chain-terraform-state-locking"
-    encrypt = true
-  }
+  #backend "s3" {
+  # bucket = "supply-chain-tf-state-237124340255"
+
+  # region = "eu-north-1"
+  #dynamodb_table = "supply-chain-terraform-state-locking"
+  #encrypt = true
+  #}
 }
 

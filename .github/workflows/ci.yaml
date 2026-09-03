@@ -7,7 +7,11 @@ on:
   pull_request:
     branches:
       - main
-
+    types: [opened,synchronize,reopened]
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
 jobs:
   docker:
     name: Validate Docker Configurations
@@ -79,3 +83,60 @@ jobs:
       - name: Run tests
         run: |
           pytest test/ -v -x
+
+  validate-and-plan-terraform:
+    name: validate & Plan
+    runs-on: ubuntu-latest
+    needs: test
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Stetup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+            terraform_version: "1.9.5"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: eu-north-1
+
+      #static checks
+      - name: Format check
+        run: terraform -chdir=terraform fmt -check -recursive
+
+      #Init against the dev state Key
+      - name: Init
+        run: terraform -chdir=terraform init -input=false -backend-config="key=dev/terraform.tfstate"
+
+      - name: Validate
+        run: terraform -chdir=terraform validate
+
+      #plan
+      - name: plan
+        id: plan
+        env:
+          TF_VAR_admin_cidr: ${{ secrets.ADMIN_CIDR }}
+          TF_VAR_key_name: ${{ secrets.EC2_KEY_NAME }}
+        run: |
+          terraform -chdir=terraform plan -input=false -out=plan.tfplan -no-color | tee plan.txt
+        
+          
+
+      #post the plan on the PR
+      - name: Comment plan on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const plan = fs.readFileSync('plan.txt', 'utf8');
+            const body = `### Terraform Plan (dev)\n\`\`\`\n${plan.slice(0, 60000)}\n\`\`\``;
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body,
+            });
