@@ -8,7 +8,7 @@ resource "aws_iam_openid_connect_provider" "github_actions" {
 
   # GitHub's OIDC thumbprint — this is the well-known, documented value.
   thumbprint_list = [
-    "227203B5317F3818CAB5B5CE596132BF36748C0E",
+    "6938fd4e98bab03faadb97b34396831e3780aea1",
   ]
 }
 
