@@ -1,0 +1,170 @@
+name: CD
+
+on:
+  push:
+    branches:
+      - main
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  TF_VERSION: "1.9.0"
+  AWS_REGION: "eu-north-1"
+
+jobs:
+
+  
+  # JOB 1 — Deploy Development + Generate Production Plan
+   
+
+  dev-and-prod-plan:
+    name: Deploy Dev & Plan Prod
+    runs-on: ubuntu-latest
+    environment: dev
+
+    steps:
+
+      # Checkout
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Terraform
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+      # AWS OIDC
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      # DEV
+
+
+      - name: Terraform Init - Dev
+        run: |
+          terraform -chdir=terraform init \
+            -input=false \
+            -backend-config="key=dev/terraform.tfstate"
+
+      - name: Terraform Validate
+        run: terraform -chdir=terraform validate
+
+      - name: Terraform Plan - Dev
+        run: |
+          terraform -chdir=terraform plan \
+            -input=false \
+            -var-file=envs/dev.tfvars \
+            -no-color
+
+      - name: Terraform Apply - Dev
+        run: |
+          terraform -chdir=terraform apply \
+            -input=false \
+            -auto-approve \
+            -var-file=envs/dev.tfvars
+
+      # PROD PLAN
+
+
+      - name: Terraform Init - Prod
+        run: |
+          terraform -chdir=terraform init \
+            -input=false \
+            -reconfigure \
+            -backend-config="key=prod/terraform.tfstate"
+
+      - name: Terraform Plan - Prod
+        run: |
+          terraform -chdir=terraform plan \
+            -input=false \
+            -var-file=envs/prod.tfvars \
+            -no-color | tee prod-plan.txt
+
+          {
+            echo "### Production Terraform Plan"
+            echo
+            echo '```text'
+            cat prod-plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+
+
+  # JOB 2 — Production Deployment
+
+
+  prod-apply:
+    name: Deploy Prod
+    needs: dev-and-prod-plan
+
+    runs-on: ubuntu-latest
+
+    environment:
+      name: production
+
+    steps:
+
+      # Checkout
+
+
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+
+      # Terraform
+
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+
+
+      # AWS OIDC
+
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
+
+      # PROD
+
+
+      - name: Terraform Init - Prod
+        run: |
+          terraform -chdir=terraform init \
+            -input=false \
+            -backend-config="key=prod/terraform.tfstate"
+
+      - name: Terraform Validate
+        run: terraform -chdir=terraform validate
+
+      - name: Terraform Plan - Prod
+        run: |
+          terraform -chdir=terraform plan \
+            -input=false \
+            -var-file=envs/prod.tfvars \
+            -no-color
+
+      - name: Terraform Apply - Prod
+        run: |
+          terraform -chdir=terraform apply \
+            -input=false \
+            -auto-approve \
+              -var-file=envs/prod.tfvars
