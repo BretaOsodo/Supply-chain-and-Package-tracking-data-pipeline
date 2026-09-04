@@ -49,6 +49,6 @@ cd /opt/Supply-chain-and-Package-tracking-data-pipeline
 docker compose up -d --build
 
 #7. show running containers
-docker compose https
+docker compose ps
 
 echo "Supply chain deployment complete"
