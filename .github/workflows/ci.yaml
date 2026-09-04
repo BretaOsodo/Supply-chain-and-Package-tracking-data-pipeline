@@ -88,6 +88,7 @@ jobs:
     name: validate & Plan
     runs-on: ubuntu-latest
     needs: test
+    environment: production
 
     steps:
       - name: Checkout code
